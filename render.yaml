@@ -1,0 +1,82 @@
+# Render Blueprint: the API and the frontend, made from this repo in one go.
+#
+# Render → New → Blueprint → pick this repo. It reads this file, creates both
+# services, and asks for the handful of values marked `sync: false` — the ones
+# that are secrets or that only you know. Everything else is set here so there
+# is nothing to remember and nothing to mistype.
+#
+# The database is not in here on purpose: it lives on Neon, which Render does
+# not create. Paste its connection string when prompted for MBS_DATABASE_URL.
+
+services:
+  # ------------------------------------------------------------------------ #
+  # The API. One worker, always — the Google Sheet sync holds an in-process
+  # lock, and two workers would be two timers writing the same tabs.
+  # ------------------------------------------------------------------------ #
+  - type: web
+    name: mbs-api
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+
+      # Signs the login tokens. Render generates it, so it is never typed,
+      # never in the repo, and never the development default.
+      - key: MBS_SECRET
+        generateValue: true
+
+      # Neon's connection string, including ?sslmode=require. Use the pooled
+      # endpoint — the one with `-pooler` in it.
+      - key: MBS_DATABASE_URL
+        sync: false
+
+      # The whole service-account JSON, pasted. Not a path: there is no disk
+      # here to put a file on, and app/sheets.py takes either.
+      - key: MBS_GOOGLE_CREDENTIALS
+        sync: false
+
+      # The two spreadsheets. Set here rather than only in the database, so a
+      # database reset does not lose them.
+      - key: MBS_SHEET_ID
+        sync: false
+      - key: MBS_MANAGER_SHEET_ID
+        sync: false
+
+      # The first manager, made only on an empty database. Delete the password
+      # from Render once you have signed in and changed it.
+      - key: MBS_ADMIN_EMAIL
+        sync: false
+      - key: MBS_ADMIN_PASSWORD
+        sync: false
+
+      # Ten seconds rather than five: still well inside "while I am looking at
+      # it", and half as many queries against a database that bills by the hour.
+      - key: MBS_SHEET_INTERVAL
+        value: "10"
+
+  # ------------------------------------------------------------------------ #
+  # The frontend: static files, free, and never asleep.
+  # ------------------------------------------------------------------------ #
+  - type: web
+    name: mbs-web
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      # Baked in at build time, not read at runtime — change it later and the
+      # frontend must be redeployed, not just the API. No trailing slash: the
+      # client does BASE + "/sheets".
+      - key: VITE_API
+        sync: false
+    routes:
+      # Every path serves the one page. The app has no router today, but a
+      # refresh on a deep link should not 404 if it ever gets one.
+      - type: rewrite
+        source: /*
+        destination: /index.html

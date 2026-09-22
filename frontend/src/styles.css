@@ -1,0 +1,395 @@
+/* MBS — the whole design system.
+ *
+ * No framework and no runtime. One file of tokens plus the dozen parts this
+ * app actually uses, which is why it paints before React has parsed.
+ *
+ * Two rules it keeps to:
+ *   1. Colour is a ramp, not a list. Neutrals run 0 to 9 and every surface,
+ *      border and text tone is a step on it, so dark mode is the same ramp
+ *      read from the other end rather than a second palette to keep in step.
+ *   2. Animation only touches transform and opacity — the two things the
+ *      compositor runs off the main thread — and nothing moves for somebody
+ *      who asked it not to.
+ */
+
+:root {
+  --n0: #fbfbfd; --n1: #ffffff; --n2: #f5f6f9; --n3: #edeff4;
+  --n4: #e2e5ec; --n5: #d2d7e0; --n6: #aeb5c2; --n7: #757d8c;
+  --n8: #454c58; --n9: #12151b;
+
+  --a-soft: #eef0fd; --a-line: #c7cbf5; --a: #4f56d6; --a-hover: #434ac2;
+  --a-text: #3f45ad; --a-on: #ffffff;
+
+  --ok-soft: #e6f6f1; --ok-line: #a6ddcf; --ok: #0e9b83; --ok-text: #0a6e5d;
+  --warn-soft: #fdf3e2; --warn-line: #efd2a2; --warn: #c37c17; --warn-text: #8c5810;
+  --bad-soft: #fdecee; --bad-line: #f3bcc0; --bad: #d63f49; --bad-text: #a72c34;
+
+  --ui: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px;
+  --s8: 32px; --s10: 40px;
+  --r1: 6px; --r2: 9px; --r3: 13px; --rf: 999px;
+
+  --sh1: 0 1px 2px rgba(18, 21, 27, .06);
+  --sh2: 0 1px 2px rgba(18, 21, 27, .05), 0 4px 12px -2px rgba(18, 21, 27, .08);
+  --sh3: 0 2px 4px rgba(18, 21, 27, .05), 0 14px 32px -8px rgba(18, 21, 27, .16);
+  --ring: 0 0 0 3px color-mix(in srgb, var(--a) 26%, transparent);
+
+  --out: cubic-bezier(.22, 1, .36, 1);
+  color-scheme: light;
+}
+
+/* Declared twice on purpose: the media query serves "follow the system" (no
+   attribute on the root), the attribute block serves an explicit choice and
+   has to win both ways — including light chosen on a machine set to dark. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --n0: #0b0c10; --n1: #131620; --n2: #181c27; --n3: #1f2430;
+    --n4: #29303e; --n5: #363e4e; --n6: #596375; --n7: #8d96a7;
+    --n8: #c2c8d4; --n9: #f2f4f8;
+    --a-soft: #1d2140; --a-line: #333a72; --a: #7a80ef; --a-hover: #8d93f5;
+    --a-text: #a6abf7; --a-on: #0b0c10;
+    --ok-soft: #102b27; --ok-line: #1d4b42; --ok: #38c3a6; --ok-text: #62d8bd;
+    --warn-soft: #2e2313; --warn-line: #4f3d1c; --warn: #d79a3c; --warn-text: #e8b661;
+    --bad-soft: #301719; --bad-line: #55262a; --bad: #e4646d; --bad-text: #f08b92;
+    --sh1: 0 1px 2px rgba(0, 0, 0, .5);
+    --sh2: 0 1px 2px rgba(0, 0, 0, .5), 0 4px 12px -2px rgba(0, 0, 0, .55);
+    --sh3: 0 2px 4px rgba(0, 0, 0, .5), 0 14px 32px -8px rgba(0, 0, 0, .65);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --n0: #0b0c10; --n1: #131620; --n2: #181c27; --n3: #1f2430;
+  --n4: #29303e; --n5: #363e4e; --n6: #596375; --n7: #8d96a7;
+  --n8: #c2c8d4; --n9: #f2f4f8;
+  --a-soft: #1d2140; --a-line: #333a72; --a: #7a80ef; --a-hover: #8d93f5;
+  --a-text: #a6abf7; --a-on: #0b0c10;
+  --ok-soft: #102b27; --ok-line: #1d4b42; --ok: #38c3a6; --ok-text: #62d8bd;
+  --warn-soft: #2e2313; --warn-line: #4f3d1c; --warn: #d79a3c; --warn-text: #e8b661;
+  --bad-soft: #301719; --bad-line: #55262a; --bad: #e4646d; --bad-text: #f08b92;
+  --sh1: 0 1px 2px rgba(0, 0, 0, .5);
+  --sh2: 0 1px 2px rgba(0, 0, 0, .5), 0 4px 12px -2px rgba(0, 0, 0, .55);
+  --sh3: 0 2px 4px rgba(0, 0, 0, .5), 0 14px 32px -8px rgba(0, 0, 0, .65);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--n0);
+  color: var(--n9);
+  font: 400 14px/1.5 var(--ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--a-text); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3 { margin: 0; font-weight: 640; letter-spacing: -.012em; }
+h1 { font-size: 22px; }
+h2 { font-size: 16px; }
+h3 { font-size: 13px; }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--n7); }
+.small { font-size: 12px; }
+.spacer { flex: 1; }
+.row { display: flex; align-items: center; gap: var(--s3); }
+.wrap-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+
+/* ═══ Chrome ═════════════════════════════════════════════════════════ */
+
+.top {
+  position: sticky; top: 0; z-index: 30;
+  display: flex; align-items: center; gap: var(--s4);
+  padding: var(--s3) var(--s5);
+  background: color-mix(in srgb, var(--n1) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--n4);
+}
+
+.brand {
+  font-weight: 760; letter-spacing: -.02em; font-size: 16px;
+  padding: 2px 9px; border-radius: var(--r1);
+  background: var(--a); color: var(--a-on);
+}
+
+.tabs { display: flex; gap: var(--s1); }
+
+.tab {
+  border: 0; background: transparent; color: var(--n7);
+  font: 500 13px var(--ui); cursor: pointer;
+  padding: 6px 12px; border-radius: var(--rf);
+  transition: color 140ms var(--out), background 140ms var(--out);
+}
+.tab:hover { color: var(--n9); background: var(--n3); }
+.tab[aria-current="true"] { color: var(--a-on); background: var(--a); }
+
+.wrap { max-width: 1180px; margin: 0 auto; padding: var(--s6) var(--s5) 80px; }
+
+.enter { animation: rise 260ms var(--out) both; }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+}
+
+/* ═══ Surfaces ═══════════════════════════════════════════════════════ */
+
+.card {
+  background: var(--n1); border: 1px solid var(--n4);
+  border-radius: var(--r3); box-shadow: var(--sh1);
+  padding: var(--s5); margin-bottom: var(--s5);
+}
+.card > header { display: flex; align-items: baseline; gap: var(--s3); margin-bottom: var(--s4); }
+
+.tiles { display: grid; gap: var(--s3); grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.tile {
+  background: var(--n1); border: 1px solid var(--n4); border-radius: var(--r2);
+  padding: var(--s4); box-shadow: var(--sh1);
+}
+.tile b { display: block; font: 700 26px/1.1 var(--mono); letter-spacing: -.02em; }
+.tile span { display: block; margin-top: 3px; font-size: 12px; color: var(--n7); }
+.tile.accent { background: var(--a-soft); border-color: var(--a-line); }
+.tile.accent b { color: var(--a-text); }
+
+/* ═══ Controls ═══════════════════════════════════════════════════════ */
+
+button, input, select, textarea { font: inherit; }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--n5); background: var(--n1); color: var(--n9);
+  padding: 7px 13px; border-radius: var(--r1); cursor: pointer;
+  font-weight: 520; font-size: 13px; white-space: nowrap;
+  transition: transform 120ms var(--out), background 120ms var(--out), border-color 120ms var(--out);
+}
+.btn:hover { background: var(--n2); border-color: var(--n6); }
+.btn:active { transform: translateY(1px); }
+.btn:focus-visible { outline: none; box-shadow: var(--ring); }
+.btn[disabled] { opacity: .5; cursor: not-allowed; }
+.btn.primary { background: var(--a); border-color: var(--a); color: var(--a-on); }
+.btn.primary:hover { background: var(--a-hover); border-color: var(--a-hover); }
+.btn.ok { background: var(--ok-soft); border-color: var(--ok-line); color: var(--ok-text); }
+.btn.bad { background: var(--bad-soft); border-color: var(--bad-line); color: var(--bad-text); }
+.btn.sm { padding: 4px 9px; font-size: 12px; }
+
+.link {
+  border: 0; background: none; color: var(--n7); cursor: pointer;
+  font-size: 13px; padding: 4px 6px; border-radius: var(--r1);
+}
+.link:hover { color: var(--n9); background: var(--n3); }
+.link.danger:hover { color: var(--bad-text); background: var(--bad-soft); }
+
+input[type="text"], input[type="email"], input[type="password"], select, textarea {
+  width: 100%; padding: 8px 10px;
+  border: 1px solid var(--n5); border-radius: var(--r1);
+  background: var(--n1); color: var(--n9);
+  transition: border-color 120ms var(--out), box-shadow 120ms var(--out);
+}
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a); box-shadow: var(--ring); }
+textarea { min-height: 110px; resize: vertical; font-family: var(--mono); font-size: 12px; }
+
+/* A cell in the entry grid. Borderless until it is being used, so a grid of
+   them reads as a table rather than as forty boxes. */
+.cell {
+  width: 100%; padding: 6px 7px;
+  border: 1px solid transparent; border-radius: var(--r1);
+  background: none; color: var(--n9);
+}
+.cell::placeholder { color: var(--n6); }
+.cell:hover { border-color: var(--n4); }
+.cell:focus { background: var(--n1); border-color: var(--a); box-shadow: var(--ring); }
+select.cell { color: var(--n8); }
+
+/* The entry grid gets the width its six columns need and the card scrolls
+   sideways on a narrow screen, rather than squeezing a date until it is
+   unreadable. */
+table.entry { min-width: 880px; }
+
+/* The date range. Its own strip above a screen's content, so it reads as
+   something governing everything below it rather than as one more filter. */
+.range {
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--n4); border-radius: var(--r2);
+  background: var(--n2);
+}
+input.day {
+  width: auto; padding: 5px 8px; font-size: 12px;
+  font-family: var(--mono); color: var(--n8);
+}
+
+/* A job link in a table: the URL itself, trimmed to a single line. */
+.url {
+  display: inline-block; max-width: 250px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  vertical-align: bottom; font-size: 12px; font-family: var(--mono);
+}
+
+.field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.field > label { font-size: 12px; font-weight: 560; color: var(--n7); }
+.grid { display: grid; gap: var(--s3); grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+
+/* ═══ Tables ═════════════════════════════════════════════════════════ */
+
+.scroll { overflow-x: auto; margin: 0 calc(-1 * var(--s5)); padding: 0 var(--s5); }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  text-align: left; font-size: 11px; font-weight: 620; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--n7);
+  padding: 0 var(--s3) var(--s2); border-bottom: 1px solid var(--n4); white-space: nowrap;
+}
+td { padding: 9px var(--s3); border-bottom: 1px solid var(--n3); vertical-align: top; }
+tbody tr { transition: background 120ms var(--out); }
+tbody tr:hover { background: var(--n2); }
+th.num, td.num { text-align: right; }
+td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+/* width:1% with nowrap is the old trick for "as narrow as the buttons need",
+   so the columns that hold words get the rest of the table. */
+td.acts, th.acts { text-align: right; white-space: nowrap; width: 1%; }
+.strong { font-weight: 600; }
+.nowrap { white-space: nowrap; }
+
+.empty {
+  padding: var(--s8) var(--s4); text-align: center; color: var(--n7);
+  border: 1px dashed var(--n5); border-radius: var(--r2); background: var(--n2);
+}
+
+/* ═══ Chips ══════════════════════════════════════════════════════════ */
+
+.chip {
+  display: inline-block; padding: 2px 8px; border-radius: var(--rf);
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+  border: 1px solid var(--n5); background: var(--n2); color: var(--n7);
+}
+.chip.own { background: var(--a-soft); border-color: var(--a-line); color: var(--a-text); }
+.chip.applied { background: var(--ok-soft); border-color: var(--ok-line); color: var(--ok-text); }
+.chip.skipped { background: var(--bad-soft); border-color: var(--bad-line); color: var(--bad-text); }
+.chip.pending { background: var(--warn-soft); border-color: var(--warn-line); color: var(--warn-text); }
+.chip.off { background: var(--n3); }
+
+/* A removable item in a list of them — the manager's platform chips. */
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 6px 4px 11px; border-radius: var(--rf);
+  border: 1px solid var(--n4); background: var(--n2);
+  font-size: 13px; white-space: nowrap;
+}
+
+.count {
+  display: inline-block; min-width: 19px; padding: 1px 6px; margin-left: 6px;
+  border-radius: var(--rf); font: 600 11px/1.55 var(--mono);
+  background: var(--n3); color: var(--n7);
+}
+.tab[aria-current="true"] .count { background: color-mix(in srgb, var(--a-on) 25%, transparent); color: var(--a-on); }
+
+/* ═══ The BD screen ══════════════════════════════════════════════════ */
+
+.split { display: grid; gap: var(--s5); grid-template-columns: 250px minmax(0, 1fr); align-items: start; }
+@media (max-width: 860px) { .split { grid-template-columns: 1fr; } }
+
+.rail { display: flex; flex-direction: column; gap: 5px; position: sticky; top: 76px; }
+
+.pick {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  padding: 9px 11px; border-radius: var(--r2);
+  border: 1px solid transparent; background: transparent; color: var(--n8);
+  transition: background 120ms var(--out), border-color 120ms var(--out);
+}
+.pick:hover { background: var(--n2); }
+.pick[aria-current="true"] { background: var(--n1); border-color: var(--n4); box-shadow: var(--sh1); color: var(--n9); }
+.pick .nm { display: block; font-weight: 600; font-size: 13px; }
+.pick .sub { display: block; font-size: 11px; color: var(--n7); margin-top: 1px; }
+
+.subtabs { display: flex; gap: var(--s1); border-bottom: 1px solid var(--n4); margin-bottom: var(--s4); }
+.subtab {
+  border: 0; border-bottom: 2px solid transparent; background: none; cursor: pointer;
+  color: var(--n7); font: 560 13px var(--ui); padding: 7px 11px; margin-bottom: -1px;
+  transition: color 120ms var(--out), border-color 120ms var(--out);
+}
+.subtab:hover { color: var(--n9); }
+.subtab[aria-current="true"] { color: var(--a-text); border-bottom-color: var(--a); }
+.subtab[aria-current="true"] .count { background: var(--a-soft); color: var(--a-text); }
+
+/* ═══ Login ══════════════════════════════════════════════════════════ */
+
+.gate { min-height: 100vh; display: grid; place-items: center; padding: var(--s5); }
+.gate form { width: 100%; max-width: 340px; display: flex; flex-direction: column; gap: var(--s3); }
+.gate .brand { align-self: flex-start; margin-bottom: var(--s2); }
+
+/* ═══ Toasts ═════════════════════════════════════════════════════════ */
+
+.toasts { position: fixed; right: var(--s5); bottom: var(--s5); z-index: 60; display: flex; flex-direction: column; gap: var(--s2); }
+.toast {
+  background: var(--n9); color: var(--n0); padding: 10px 14px;
+  border-radius: var(--r2); box-shadow: var(--sh3); font-size: 13px; max-width: 360px;
+  animation: pop 220ms var(--out) both;
+}
+.toast.bad { background: var(--bad); color: #fff; }
+@keyframes pop { from { opacity: 0; transform: translateY(8px) scale(.97); } }
+
+/* ═══ Bringing a sheet across ════════════════════════════════════════ */
+
+/* The importer is set off from the entry grid below it rather than made into
+   a card of its own: it is the same act as the grid, done wholesale, and two
+   cards would read as two unrelated things to fill in. */
+.importer {
+  margin-bottom: var(--s5); padding: var(--s4);
+  border: 1px solid var(--n4); border-radius: var(--r2); background: var(--n2);
+}
+
+/* The whole label is the target, so a file can be dropped anywhere on it and
+   a click anywhere on it opens the picker. */
+.drop {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  padding: var(--s4);
+  border: 1px dashed var(--n5); border-radius: var(--r2); background: var(--n1);
+  cursor: pointer; transition: border-color 120ms var(--out), background 120ms var(--out);
+}
+.drop:hover { border-color: var(--n6); }
+.drop.over { border-color: var(--a); background: var(--a-soft); }
+.drop input[type="file"] { width: auto; flex: 0 0 auto; font-size: 12px; }
+
+.report {
+  margin-top: var(--s4); padding: var(--s4);
+  border: 1px solid var(--n4); border-radius: var(--r2); background: var(--n1);
+}
+
+/* Six numbers that add up to the number of lines in the file. Laid out as one
+   row of equals rather than as a headline and a footnote, because the point
+   of them is that they are one accounting and none of them is the answer. */
+.buckets {
+  display: grid; gap: var(--s2); margin-bottom: var(--s3);
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+.bucket {
+  padding: var(--s3); border: 1px solid var(--n4); border-radius: var(--r1);
+  background: var(--n2);
+}
+.bucket b { display: block; font: 700 19px/1.1 var(--mono); letter-spacing: -.02em; }
+.bucket span { display: block; margin-top: 3px; font-size: 11px; color: var(--n7); }
+.bucket.ok { background: var(--ok-soft); border-color: var(--ok-line); }
+.bucket.ok b { color: var(--ok-text); }
+.bucket.warn { background: var(--warn-soft); border-color: var(--warn-line); }
+.bucket.warn b { color: var(--warn-text); }
+/* A bucket holding nothing is the good news. It recedes rather than sitting
+   there in warning colours saying zero. */
+.bucket.nil { opacity: .5; }
+.bucket.nil b { color: var(--n7); }
+
+/* ═══ Select all ═════════════════════════════════════════════════════ */
+
+/* Only on screen while something is ticked, so it can be loud: it is the bar
+   that turns three thousand pending rows into none. */
+.bulk {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2);
+  margin-bottom: var(--s3); padding: var(--s2) var(--s3);
+  border: 1px solid var(--a-line); border-radius: var(--r2); background: var(--a-soft);
+}
+.bulk > b { font: 700 15px/1 var(--mono); color: var(--a-text); }
+
+th.tick, td.tick { width: 1%; padding-right: 0; text-align: center; }
+td.tick { vertical-align: middle; }
+.tick input[type="checkbox"] { width: 15px; height: 15px; margin: 0; accent-color: var(--a); cursor: pointer; }
+tbody tr.picked { background: var(--a-soft); }
+tbody tr.picked:hover { background: var(--a-soft); }

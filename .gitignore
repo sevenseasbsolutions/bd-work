@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+!frontend/package.json
+!frontend/package-lock.json
+!backend/**/*.schema.json
+client_secret_*.json
+.venv/
+node_modules/
+dist/
+*.db
+.env
+
+# Google service-account keys and OAuth client secrets. Never in the repo:
+# a private key in a git history is a private key you have to rotate, and the
+# server is handed this through MBS_GOOGLE_CREDENTIALS instead.
+*.json
+

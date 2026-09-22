@@ -1,0 +1,23 @@
+# Lower bounds, not pins: the compiled wheels (bcrypt, psycopg2) only publish
+# for interpreters that existed when they shipped, so a hard pin means a newer
+# Python tries to build from source and fails.
+fastapi>=0.115.6,<1.0
+uvicorn[standard]>=0.34.0,<1.0
+sqlalchemy>=2.0.36,<3.0
+pydantic>=2.10.4,<3.0
+email-validator>=2.2.0,<3.0
+PyJWT>=2.10.1,<3.0
+bcrypt>=4.2.1,<6.0
+# Writes the .xlsx exports. No pandas: the rows are already in memory and a
+# dataframe in the middle would be a dependency and a copy for nothing.
+openpyxl>=3.1.5,<4.0
+# Only needed to point MBS_DATABASE_URL at Postgres. SQLite needs nothing.
+psycopg2-binary>=2.9.10,<3.0
+# The sheet upload arrives as multipart/form-data; FastAPI needs this to read
+# an UploadFile at all.
+python-multipart>=0.0.20,<1.0
+# The Google Sheet mirror (sheets.py). Only imported when MBS_SHEET_ID and
+# MBS_GOOGLE_CREDENTIALS are both set, so a workspace that does not mirror runs
+# without these installed at all.
+google-api-python-client>=2.150.0,<3.0
+google-auth>=2.36.0,<3.0
