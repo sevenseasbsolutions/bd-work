@@ -1,0 +1,20 @@
+[Unit]
+Description=BD Work web (built Vite app, behind nginx at server.idsservices.us)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=server
+Group=server
+WorkingDirectory=/home/server/bd-work/frontend
+# Serves the prebuilt dist/ (npm run build with VITE_API=/api). Port and host
+# are in vite.config.js (preview: 127.0.0.1:8011).
+ExecStart=/home/server/.nvm/versions/node/v24.21.0/bin/node /home/server/bd-work/frontend/node_modules/vite/bin/vite.js preview
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
