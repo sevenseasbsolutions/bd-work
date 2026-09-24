@@ -6,11 +6,13 @@ has no fingerprint and no id, so a sheet that could be edited back into the pool
 would be a workspace that disagrees with itself; the ways in stay the entry grid
 and the sheet importer, which both go through `log_find` and both dedupe.
 
-**The team's file** has a tab per BD, named after them, carrying everything that
-person has applied for across every profile they run — their own finds and the
-others' jobs they took on, which is exactly the "applied" of the five words. A
-BD hired this afternoon has a tab on the next pass and fills it as they work;
-nobody configures anything.
+**The team's file** has a tab per SSN profile, named after it, carrying
+everything applied for under that profile — its own finds and the others' jobs
+it took on, which is exactly the "applied" of the five words. A profile added
+this afternoon has a tab on the next pass and fills as it is worked; nobody
+configures anything. Per profile rather than per BD because the profile is the
+unit of work: it can move between BDs, and its tab moves with it. The BD
+holding it, and the BD who found each job, are columns on every row.
 
 **The manager's file** is separate, and holds the four screens they read. Two
 files rather than four tabs in one, because the two are shown to different
@@ -47,7 +49,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import func, or_, select, true
+from sqlalchemy import func, select, true
 from sqlalchemy.orm import Session, aliased
 
 from . import dispatch, exports, settings
@@ -64,6 +66,7 @@ WATERMARK = "sheet_sync_watermark"   # the highest application id on the tab
 LOGGED = "sheet_sync_logged"         # how many rows were appended to it
 LAST_FILED = "sheet_sync_last_filed"  # the newest `created_at` among those rows
 TAB_NAME = "sheet_sync_tab"          # the tab it was written to, to catch renames
+HOLDER = "sheet_sync_holder"         # the BD holding the profile when it was written
 
 # Where the two spreadsheets are. Stored values so a manager can paste a link
 # without a deploy; the environment is the fallback, for a server that would
@@ -85,11 +88,11 @@ DAY_TAB = "By day"
 POOL_TAB = "All jobs"
 MANAGER_TABS = (OVERVIEW_TAB, BD_TAB, PROFILES_TAB, DAY_TAB, POOL_TAB)
 
-# What a BD's tab carries: everything they have applied for, in the order the
-# work happened. "Profile" is there because one person may run several and a
-# client cannot be told which identity applied from the company name alone;
-# "Own or others" is the split every number on the manager's screen is made of.
-APPLIED_COLUMNS = ["Applied on", "Profile", "Company name", "Job title",
+# What a profile's tab carries: everything applied for under it, in the order
+# the work happened. "BD" is whoever holds the profile; "Found by" is the BD who
+# put the job in the pool — people, not profile names, in both. "Own or others"
+# is the split every number on the manager's screen is made of.
+APPLIED_COLUMNS = ["Applied on", "BD", "Company name", "Job title",
                    "Job link", "Job platform", "Email", "Own or others",
                    "Found by", "Filed at"]
 
@@ -106,7 +109,7 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 # --------------------------------------------------------------------------- #
 
 def team_sheet_id(db: Session) -> str:
-    """The file with a tab per BD."""
+    """The file with a tab per profile."""
     return (settings.raw_get(db, TEAM_KEY, "").strip()
             or os.environ.get("MBS_SHEET_ID", "").strip())
 
@@ -160,7 +163,7 @@ def _seconds(name: str, fallback: float) -> float:
 def configured(db: Session) -> bool:
     """Whether there is anything to sync to, and anything to sync with.
 
-    Either file on its own is enough: a team that wants the BD tabs and no
+    Either file on its own is enough: a team that wants the profile tabs and no
     manager file, or the other way round, is a workspace that mirrors.
     """
     return bool(credentials()
@@ -168,7 +171,7 @@ def configured(db: Session) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-# A tab per BD
+# A tab per profile
 # --------------------------------------------------------------------------- #
 
 # Google refuses these in a tab name, and caps it at 100 characters.
@@ -184,26 +187,21 @@ def tab_name(name: str) -> str:
 
 @dataclass(frozen=True)
 class Target:
-    """One BD and the tab their applied jobs go on."""
+    """One profile and the tab its applied jobs go on."""
     key: str
     tab: str
-    user_id: int
+    profile_id: int
     name: str
 
 
 def targets(db: Session) -> list[Target]:
-    """Every BD, in name order, plus anybody else who holds a profile.
+    """Every profile, in name order — switched off or not, held or not.
 
-    The second half is not pedantry: a manager who runs a profile of their own
-    is doing the work, and a tab list that only looked at the role would drop
-    what they applied for without saying so.
+    A profile that is off, or that nobody holds this week, still has a history,
+    and a tab that vanished with the switch would be history nobody can find.
     """
-    holders = select(Profile.user_id).where(Profile.user_id.is_not(None))
-    rows = db.execute(
-        select(User.id, User.name)
-        .where(or_(User.role == "bd", User.id.in_(holders)))
-        .order_by(User.name)).all()
-    return [Target(f"bd:{uid}", tab_name(name), uid, name) for uid, name in rows]
+    rows = db.execute(select(Profile.id, Profile.name).order_by(Profile.name)).all()
+    return [Target(f"profile:{pid}", tab_name(name), pid, name) for pid, name in rows]
 
 
 # --------------------------------------------------------------------------- #
@@ -306,35 +304,38 @@ def _visible(db: Session):
 
 def applied_rows(db: Session, target: Target,
                  after: int = 0) -> tuple[list[list], int]:
-    """What this BD has applied for since id `after`, and the new watermark.
+    """What this profile has applied for since id `after`, and the new watermark.
 
-    Every profile they hold, together. Applications and nothing else, which is
-    the five words' "applied": their own finds, plus the others' jobs they took
-    on. A pending row is not on here because nobody has applied for it yet, and
-    a skipped one never will be.
+    Applications and nothing else, which is the five words' "applied": its own
+    finds, plus the others' jobs it took on. A pending row is not on here
+    because nobody has applied for it yet, and a skipped one never will be.
 
     Ordered by id rather than by date, because the tab is a log of the order the
     work was filed in, and the date column is free text somebody backfilling
     yesterday types into.
     """
+    holder = aliased(User)
     finder = aliased(Profile)
+    finder_bd = aliased(User)
     found = db.execute(
-        select(Application, Job, Profile.name, finder.name)
+        select(Application, Job, holder.name, finder_bd.name)
         .join(Job, Job.id == Application.job_id)
         .join(Profile, Profile.id == Application.profile_id)
+        .outerjoin(holder, holder.id == Profile.user_id)
         .outerjoin(finder, finder.id == Job.found_by_id)
+        .outerjoin(finder_bd, finder_bd.id == finder.user_id)
         .where(Application.id > after, _visible(db),
-               Profile.user_id == target.user_id)
+               Application.profile_id == target.profile_id)
         .order_by(Application.id)
     ).all()
 
     rows: list[list] = []
     mark = after
-    for application, job, under, found_by in found:
+    for application, job, bd, found_by in found:
         filed: datetime | None = application.created_at
         rows.append([
             application.applied_on or (filed.date().isoformat() if filed else ""),
-            under, job.company, job.title, job.url, job.platform,
+            bd or "—", job.company, job.title, job.url, job.platform,
             application.email,
             "Own job" if application.source == "own" else "Others job",
             found_by or "—",
@@ -397,7 +398,7 @@ def _book(key: str, target: Target) -> str:
 
 
 def _fingerprint(db: Session, target: Target, mark: int) -> tuple[int, str]:
-    """This BD's applications at or below `mark`: how many, and the newest.
+    """This profile's applications at or below `mark`: how many, and the newest.
 
     Two numbers rather than one, and the second is the interesting one. SQLite
     hands back the highest rowid it has just freed, so deleting the newest
@@ -409,27 +410,27 @@ def _fingerprint(db: Session, target: Target, mark: int) -> tuple[int, str]:
     """
     count, newest = db.execute(
         select(func.count(), func.max(Application.created_at))
-        .join(Profile, Profile.id == Application.profile_id)
         .where(Application.id <= mark, _visible(db),
-               Profile.user_id == target.user_id)).one()
+               Application.profile_id == target.profile_id)).one()
     return count or 0, newest.isoformat() if newest else ""
 
 
 def drifted(db: Session, target: Target, mark: int, logged: int,
             filed: str) -> bool:
-    """Whether the tab still says what this BD's applications say.
+    """Whether the tab still says what this profile's applications say.
 
     An application that was put on the tab and is not in the database any more
-    means somebody pressed Undo, or withdrew a mistyped find — or a profile was
-    handed to somebody else, which takes its history with it. One query, not a
-    read of the whole spreadsheet back out of Google.
+    means somebody pressed Undo, or withdrew a mistyped find. One query, not a
+    read of the whole spreadsheet back out of Google. (A profile handed to a
+    different BD does not show up here — the rows are the same rows — so
+    `sync_bd` compares the holder separately.)
     """
     count, newest = _fingerprint(db, target, mark)
     return count != logged or newest != filed
 
 
 def place_tab(db: Session, book, tabs: dict[str, int], target: Target) -> bool:
-    """Make sure this BD's tab exists, and say whether it is ours yet.
+    """Make sure this profile's tab exists, and say whether it is ours yet.
 
     Returns "has this tab never been written by us", not "did we just make it" —
     and the difference matters. A tab somebody created by hand, or one another
@@ -437,7 +438,7 @@ def place_tab(db: Session, book, tabs: dict[str, int], target: Target) -> bool:
     a column of data with no headings above it. Whether we have written a tab is
     something we know from our own bookkeeping, without asking Google.
 
-    Somebody renamed on the People screen keeps their tab and its history: the
+    A profile renamed on the People screen keeps its tab and its history: the
     alternative is a second tab with the same rows on it and no way to tell
     which is live. A tab of ours that somebody deleted is made again, and made
     again means written from nothing.
@@ -473,7 +474,7 @@ def place_tab(db: Session, book, tabs: dict[str, int], target: Target) -> bool:
 
 def sync_bd(db: Session, book, tabs: dict[str, int], target: Target, *,
             rebuild: bool = False) -> dict:
-    """One pass over one BD's tab.
+    """One pass over one profile's tab.
 
     The tab is written before the watermark is committed, never the other way
     round: a crash in between repeats rows, which the next rebuild puts right,
@@ -483,8 +484,15 @@ def sync_bd(db: Session, book, tabs: dict[str, int], target: Target, *,
     mark = int(settings.raw_get(db, _book(WATERMARK, target), "0") or 0)
     logged = int(settings.raw_get(db, _book(LOGGED, target), "0") or 0)
     filed = settings.raw_get(db, _book(LAST_FILED, target), "")
+    # Every row carries the holder's name, so handing the profile to another
+    # BD — or renaming that BD — rewrites the tab rather than leaving the old
+    # name on the old rows. ("Found by" names catch up on the hourly rebuild.)
+    holder = db.scalar(select(User.name).join(Profile, Profile.user_id == User.id)
+                       .where(Profile.id == target.profile_id)) or ""
+    moved = settings.raw_get(db, _book(HOLDER, target), holder) != holder
 
-    from_scratch = rebuild or fresh or drifted(db, target, mark, logged, filed)
+    from_scratch = (rebuild or fresh or moved
+                    or drifted(db, target, mark, logged, filed))
 
     if from_scratch:
         rows, mark = applied_rows(db, target, 0)
@@ -503,6 +511,7 @@ def sync_bd(db: Session, book, tabs: dict[str, int], target: Target, *,
     settings.raw_put(db, _book(LOGGED, target), str(logged))
     settings.raw_put(db, _book(LAST_FILED, target), filed)
     settings.raw_put(db, _book(TAB_NAME, target), target.tab)
+    settings.raw_put(db, _book(HOLDER, target), holder)
     db.commit()
 
     return {"target": target.key, "name": target.name, "tab": target.tab,
@@ -561,7 +570,7 @@ def rewrite_manager(db: Session, book, tabs: dict[str, int]) -> None:
 # Every tab, one pass
 # --------------------------------------------------------------------------- #
 
-# What /sheets reports, one entry per BD. A mirror nobody can see the state of
+# What /sheets reports, one entry per profile. A mirror nobody can see the state of
 # is a mirror somebody has to open the spreadsheet to trust.
 running = False
 state: dict[str, dict] = {}
@@ -595,7 +604,7 @@ def reset(db: Session, book) -> list[str]:
 def forget(db: Session) -> None:
     """Drop every watermark, so the next pass writes each tab from nothing."""
     for target in targets(db):
-        for key in (WATERMARK, LOGGED, LAST_FILED, TAB_NAME):
+        for key in (WATERMARK, LOGGED, LAST_FILED, TAB_NAME, HOLDER):
             settings.raw_put(db, _book(key, target), "")
     db.commit()
     state.clear()
@@ -619,12 +628,12 @@ def one_pass(derived: bool, rebuild: bool,
              only: str | None = None) -> list[dict] | None:
     """A pass over both files, or None if the manager has it switched off.
 
-    Each BD is written in its own try: one tab failing must not stop the ones
-    after it, nor the manager's file. What comes back is one result per BD, with
-    whatever went wrong recorded against the person it went wrong for.
+    Each profile is written in its own try: one tab failing must not stop the
+    ones after it, nor the manager's file. What comes back is one result per
+    profile, with whatever went wrong recorded against the tab it went wrong for.
 
     Each file's tab list is read once for the whole pass rather than once per
-    BD. With a tab each and a pass every five seconds, the other way would spend
+    profile. With a tab each and a pass every five seconds, the other way would spend
     the read quota finding out what it already knew.
 
     Blocking, on purpose — the caller either runs it in a thread or is a
@@ -710,7 +719,7 @@ async def run() -> None:
             except Exception as problem:            # noqa: BLE001
                 # A pass that throws must not take the loop with it: the sheet
                 # being unreachable for ten minutes is not a reason for MBS to
-                # stop mirroring for the rest of the day. Per-BD failures are
+                # stop mirroring for the rest of the day. Per-tab failures are
                 # already caught inside `one_pass`; this is the database being
                 # unreachable, or something else outside any one tab.
                 log.warning("sheet mirror pass failed: %s", problem)
@@ -736,7 +745,7 @@ def status(db: Session) -> dict:
         "manager_sheet": manager_sheet_id(db),
         "manager_url": link(manager_sheet_id(db)),
         "manager_tabs": list(MANAGER_TABS),
-        "bds": [{"target": t.key, "name": t.name, "tab": t.tab,
-                 "user_id": t.user_id, **state.get(t.key, _blank())}
-                for t in targets(db)],
+        "tabs": [{"target": t.key, "name": t.name, "tab": t.tab,
+                  "profile_id": t.profile_id, **state.get(t.key, _blank())}
+                 for t in targets(db)],
     }

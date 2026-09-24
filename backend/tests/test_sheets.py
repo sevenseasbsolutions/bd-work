@@ -1,4 +1,4 @@
-"""The Google Sheet mirror: a tab per BD in one file, the manager in another.
+"""The Google Sheet mirror: a tab per profile in one file, the manager in another.
 
 Google is not here, so the spreadsheets are. `Paper` below keeps its tabs in a
 dict — not a mock of the Sheets wire protocol but the same six methods
@@ -87,16 +87,17 @@ def on(client, manager, monkeypatch):
     return manager
 
 
-def target_for(bd) -> sheets.Target:
-    """One BD, as the tab their work goes on."""
-    return sheets.Target(f"bd:{bd['id']}", sheets.tab_name(bd["name"]),
-                         bd["id"], bd["name"])
+def target_for(profile) -> sheets.Target:
+    """One profile, as the tab its work goes on."""
+    return sheets.Target(f"profile:{profile['id']}",
+                         sheets.tab_name(profile["name"]),
+                         profile["id"], profile["name"])
 
 
-def pass_over(paper, bd, **kw) -> dict:
-    """One pass over one BD's tab, as the timer would run it."""
+def pass_over(paper, profile, **kw) -> dict:
+    """One pass over one profile's tab, as the timer would run it."""
     with SessionLocal() as db:
-        return sheets.sync_bd(db, paper, paper.tabs(), target_for(bd), **kw)
+        return sheets.sync_bd(db, paper, paper.tabs(), target_for(profile), **kw)
 
 
 def both_files(monkeypatch, team, boss):
@@ -120,23 +121,38 @@ def crew(client, manager):
             sign_in(client, "bilal@mbs.co", "secret"), bilal, hamza)
 
 
+KHURAM = "Khuram — AI Engineer"      # Ayesha's profile, and its tab
+HAMZA = "Hamza — Full Stack"         # Bilal's profile, and its tab
+
+
+def apply_for_first_handed(client, headers, profile):
+    """Take the first others' job waiting on this profile."""
+    handed = client.get(f"/profiles/{profile['id']}/others", headers=headers,
+                        params={"status": "pending"}).json()
+    reply = client.post(f"/assignments/{handed[0]['assignment_id']}",
+                        headers=headers, json={"status": "applied"})
+    assert reply.status_code == 200, reply.text
+
+
 # --------------------------------------------------------------------------- #
-# A tab per BD, by their name
+# A tab per profile, by its name
 # --------------------------------------------------------------------------- #
 
-def test_every_bd_gets_a_tab_named_after_them(client, manager, on, monkeypatch):
+def test_every_profile_gets_a_tab_named_after_it(client, manager, on,
+                                                 monkeypatch):
     crew(client, manager)
     team, boss = Paper(), Paper()
 
     whole_pass(monkeypatch, team, boss)
 
-    assert "Ayesha Raza" in team.tabs()
-    assert "Bilal Khan" in team.tabs()
-    # Names, not profiles.
-    assert "Khuram — AI Engineer" not in team.tabs()
+    assert KHURAM in team.tabs()
+    assert HAMZA in team.tabs()
+    # Profiles, not people.
+    assert "Ayesha Raza" not in team.tabs()
+    assert "Bilal Khan" not in team.tabs()
 
 
-def test_a_tab_carries_only_that_bds_applied_jobs(client, manager, on):
+def test_a_tab_carries_only_that_profiles_applied_jobs(client, manager, on):
     hers, ayesha, khuram, his, bilal, hamza = crew(client, manager)
     log(client, hers, khuram["id"], company="Ayesha Found This", title="Engineer",
         url="https://www.linkedin.com/jobs/view/3912000001")
@@ -144,15 +160,15 @@ def test_a_tab_carries_only_that_bds_applied_jobs(client, manager, on):
         url="https://www.linkedin.com/jobs/view/3912000002")
 
     team = Paper()
-    pass_over(team, ayesha)
-    pass_over(team, bilal)
+    pass_over(team, khuram)
+    pass_over(team, hamza)
 
-    assert team.column("Ayesha Raza", "Company name") == ["Ayesha Found This"]
-    assert team.column("Bilal Khan", "Company name") == ["Bilal Found This"]
+    assert team.column(KHURAM, "Company name") == ["Ayesha Found This"]
+    assert team.column(HAMZA, "Company name") == ["Bilal Found This"]
 
 
-def test_both_of_one_bds_profiles_land_on_their_one_tab(client, manager, on):
-    """The reason the Profile column is there: one person, several identities."""
+def test_each_of_one_bds_profiles_gets_its_own_tab(client, manager, on):
+    """One person, several identities: a tab each, the BD column says who."""
     hers, ayesha, khuram, _his, _bilal, _hamza = crew(client, manager)
     zahid = make_profile(client, manager, "Zahid — ML Engineer", ayesha["id"])
 
@@ -162,12 +178,13 @@ def test_both_of_one_bds_profiles_land_on_their_one_tab(client, manager, on):
         url="https://www.linkedin.com/jobs/view/3912000002")
 
     team = Paper()
-    pass_over(team, ayesha)
+    pass_over(team, khuram)
+    pass_over(team, zahid)
 
-    assert team.column("Ayesha Raza", "Company name") == ["Under Khuram",
-                                                          "Under Zahid"]
-    assert team.column("Ayesha Raza", "Profile") == ["Khuram — AI Engineer",
-                                                     "Zahid — ML Engineer"]
+    assert team.column(KHURAM, "Company name") == ["Under Khuram"]
+    assert team.column("Zahid — ML Engineer", "Company name") == ["Under Zahid"]
+    assert team.column(KHURAM, "BD") == ["Ayesha Raza"]
+    assert team.column("Zahid — ML Engineer", "BD") == ["Ayesha Raza"]
 
 
 def test_the_columns_are_the_attributes_of_an_applied_job(client, manager, on):
@@ -177,19 +194,41 @@ def test_the_columns_are_the_attributes_of_an_applied_job(client, manager, on):
         platform="LinkedIn", email="khuram@mbs.co", applied_on="2026-09-14")
 
     team = Paper()
-    pass_over(team, ayesha)
+    pass_over(team, khuram)
 
-    assert team.pages["Ayesha Raza"][0] == sheets.APPLIED_COLUMNS
-    row = dict(zip(sheets.APPLIED_COLUMNS, team.body("Ayesha Raza")[0]))
+    assert team.pages[KHURAM][0] == sheets.APPLIED_COLUMNS
+    assert sheets.APPLIED_COLUMNS == [
+        "Applied on", "BD", "Company name", "Job title", "Job link",
+        "Job platform", "Email", "Own or others", "Found by", "Filed at"]
+    row = dict(zip(sheets.APPLIED_COLUMNS, team.body(KHURAM)[0]))
     assert row["Applied on"] == "2026-09-14"
-    assert row["Profile"] == "Khuram — AI Engineer"
+    assert row["BD"] == "Ayesha Raza"
     assert row["Company name"] == "Northwind"
     assert row["Job title"] == "Engineer"
     assert row["Job link"] == "https://www.linkedin.com/jobs/view/3912000001"
     assert row["Job platform"] == "LinkedIn"
     assert row["Email"] == "khuram@mbs.co"
     assert row["Own or others"] == "Own job"
-    assert row["Found by"] == "Khuram — AI Engineer"
+    # A person, not a profile name.
+    assert row["Found by"] == "Ayesha Raza"
+
+
+def test_targets_are_every_profile_in_name_order(client, manager, on):
+    """Switched off or not, held or not — each one has a history."""
+    _hers, _ayesha, khuram, _his, _bilal, hamza = crew(client, manager)
+    idle = make_profile(client, manager, "Aamir — Unheld")
+    off = make_profile(client, manager, "Zeeshan — Off")
+    assert client.patch(f"/profiles/{off['id']}", headers=manager,
+                        json={"is_active": False}).status_code == 200
+
+    with SessionLocal() as db:
+        found = sheets.targets(db)
+
+    assert [t.name for t in found] == ["Aamir — Unheld", HAMZA, KHURAM,
+                                       "Zeeshan — Off"]
+    assert [t.profile_id for t in found] == [idle["id"], hamza["id"],
+                                             khuram["id"], off["id"]]
+    assert [t.key for t in found] == [f"profile:{t.profile_id}" for t in found]
 
 
 def test_a_name_google_will_not_take_is_made_into_one(client, manager):
@@ -214,14 +253,14 @@ def test_an_others_job_applied_for_lands_on_the_takers_tab(client, manager, on):
                 json={"status": "applied"})
 
     team = Paper()
-    pass_over(team, bilal)
+    pass_over(team, hamza)
 
-    row = dict(zip(sheets.APPLIED_COLUMNS, team.body("Bilal Khan")[0]))
+    row = dict(zip(sheets.APPLIED_COLUMNS, team.body(HAMZA)[0]))
     assert row["Own or others"] == "Others job"
     assert row["Company name"] == "Northwind"
-    assert row["Profile"] == "Hamza — Full Stack"
-    # Whose find it was, which the row cannot say for itself.
-    assert row["Found by"] == "Khuram — AI Engineer"
+    assert row["BD"] == "Bilal Khan"
+    # Whose find it was, which the row cannot say for itself — the finder's BD.
+    assert row["Found by"] == "Ayesha Raza"
 
 
 def test_a_pending_job_is_not_on_the_tab_until_it_is_applied_for(client, manager,
@@ -231,16 +270,16 @@ def test_a_pending_job_is_not_on_the_tab_until_it_is_applied_for(client, manager
         url="https://www.linkedin.com/jobs/view/3912000001")
 
     team = Paper()
-    pass_over(team, bilal)
-    assert team.body("Bilal Khan") == []
+    pass_over(team, hamza)
+    assert team.body(HAMZA) == []
 
     handed = client.get(f"/profiles/{hamza['id']}/others", headers=his,
                         params={"status": "pending"}).json()
     client.post(f"/assignments/{handed[0]['assignment_id']}", headers=his,
                 json={"status": "applied"})
 
-    assert pass_over(team, bilal)["appended"] == 1
-    assert team.column("Bilal Khan", "Company name") == ["Northwind"]
+    assert pass_over(team, hamza)["appended"] == 1
+    assert team.column(HAMZA, "Company name") == ["Northwind"]
 
 
 def test_a_skipped_job_never_reaches_the_tab(client, manager, on):
@@ -253,8 +292,8 @@ def test_a_skipped_job_never_reaches_the_tab(client, manager, on):
                 json={"status": "skipped"})
 
     team = Paper()
-    pass_over(team, bilal)
-    assert team.body("Bilal Khan") == []
+    pass_over(team, hamza)
+    assert team.body(HAMZA) == []
 
 
 def test_undoing_an_application_takes_its_row_back_off(client, manager, on):
@@ -268,16 +307,16 @@ def test_undoing_an_application_takes_its_row_back_off(client, manager, on):
                 json={"status": "applied"})
 
     team = Paper()
-    pass_over(team, bilal)
-    assert len(team.body("Bilal Khan")) == 1
+    pass_over(team, hamza)
+    assert len(team.body(HAMZA)) == 1
 
     client.post(f"/assignments/{assignment}", headers=his,
                 json={"status": "pending"})
-    result = pass_over(team, bilal)
+    result = pass_over(team, hamza)
 
     assert result["rebuilt"] is True
-    assert team.body("Bilal Khan") == []
-    assert team.pages["Bilal Khan"][0] == sheets.APPLIED_COLUMNS
+    assert team.body(HAMZA) == []
+    assert team.pages[HAMZA][0] == sheets.APPLIED_COLUMNS
 
 
 # --------------------------------------------------------------------------- #
@@ -289,14 +328,14 @@ def test_the_second_pass_appends_only_what_is_new(client, manager, on):
     log(client, hers, khuram["id"], company="Northwind", title="Engineer",
         url="https://www.linkedin.com/jobs/view/3912000001")
     team = Paper()
-    pass_over(team, ayesha)
+    pass_over(team, khuram)
 
     log(client, hers, khuram["id"], company="Tailspin", title="Analyst",
         url="https://www.linkedin.com/jobs/view/3912000002")
-    result = pass_over(team, ayesha)
+    result = pass_over(team, khuram)
 
     assert result["appended"] == 1 and result["rebuilt"] is False
-    assert team.column("Ayesha Raza", "Company name") == ["Northwind", "Tailspin"]
+    assert team.column(KHURAM, "Company name") == ["Northwind", "Tailspin"]
 
 
 def test_a_pass_with_nothing_new_writes_no_rows(client, manager, on):
@@ -304,30 +343,30 @@ def test_a_pass_with_nothing_new_writes_no_rows(client, manager, on):
     log(client, hers, khuram["id"], company="Northwind", title="Engineer",
         url="https://www.linkedin.com/jobs/view/3912000001")
     team = Paper()
-    pass_over(team, ayesha)
+    pass_over(team, khuram)
     before = team.appends
 
-    result = pass_over(team, ayesha)
+    result = pass_over(team, khuram)
 
     assert result["appended"] == 0 and result["rebuilt"] is False
     assert team.appends == before          # not one wasted call to Google
 
 
-def test_two_bds_keep_their_own_watermarks(client, manager, on):
+def test_two_profiles_keep_their_own_watermarks(client, manager, on):
     hers, ayesha, khuram, his, bilal, hamza = crew(client, manager)
     log(client, hers, khuram["id"], company="Hers One", title="Engineer",
         url="https://www.linkedin.com/jobs/view/3912000001")
     team = Paper()
-    pass_over(team, ayesha)
-    pass_over(team, bilal)
+    pass_over(team, khuram)
+    pass_over(team, hamza)
 
     log(client, his, hamza["id"], company="His One", title="Engineer",
         url="https://www.linkedin.com/jobs/view/3912000002")
 
-    assert pass_over(team, bilal)["appended"] == 1
-    assert pass_over(team, ayesha)["appended"] == 0
-    assert team.column("Ayesha Raza", "Company name") == ["Hers One"]
-    assert team.column("Bilal Khan", "Company name") == ["His One"]
+    assert pass_over(team, hamza)["appended"] == 1
+    assert pass_over(team, khuram)["appended"] == 0
+    assert team.column(KHURAM, "Company name") == ["Hers One"]
+    assert team.column(HAMZA, "Company name") == ["His One"]
 
 
 def test_a_find_that_reuses_a_freed_id_is_still_noticed(client, manager, on):
@@ -336,7 +375,7 @@ def test_a_find_that_reuses_a_freed_id_is_still_noticed(client, manager, on):
     log(client, hers, khuram["id"], company="Northwind", title="Engineer",
         url="https://www.linkedin.com/jobs/view/3912000001")
     team = Paper()
-    pass_over(team, ayesha)
+    pass_over(team, khuram)
 
     own = client.get(f"/profiles/{khuram['id']}/own", headers=hers).json()
     client.delete(f"/profiles/{khuram['id']}/own/{own[0]['application_id']}",
@@ -344,95 +383,192 @@ def test_a_find_that_reuses_a_freed_id_is_still_noticed(client, manager, on):
     log(client, hers, khuram["id"], company="Tailspin", title="Analyst",
         url="https://www.linkedin.com/jobs/view/3912000002")
 
-    result = pass_over(team, ayesha)
+    result = pass_over(team, khuram)
 
     assert result["rebuilt"] is True
-    assert team.column("Ayesha Raza", "Company name") == ["Tailspin"]
+    assert team.column(KHURAM, "Company name") == ["Tailspin"]
 
 
-def test_handing_a_profile_over_moves_its_history_to_the_new_tab(client, manager,
-                                                                 on, monkeypatch):
-    """A profile keeps its history; whose tab it shows on is whoever holds it."""
+def test_handing_a_profile_over_keeps_its_tab_and_names_the_new_bd(
+        client, manager, on, monkeypatch):
+    """The tab belongs to the profile; the BD column is whoever holds it now."""
     hers, ayesha, khuram, _his, bilal, _hamza = crew(client, manager)
     log(client, hers, khuram["id"], company="Northwind", title="Engineer",
         url="https://www.linkedin.com/jobs/view/3912000001")
     team, boss = Paper(), Paper()
     whole_pass(monkeypatch, team, boss)
-    assert team.column("Ayesha Raza", "Company name") == ["Northwind"]
+    assert team.column(KHURAM, "Company name") == ["Northwind"]
+    assert team.column(KHURAM, "BD") == ["Ayesha Raza"]
 
     client.patch(f"/profiles/{khuram['id']}", headers=manager,
                  json={"user_id": bilal["id"]})
     whole_pass(monkeypatch, team, boss)
 
-    assert team.body("Ayesha Raza") == []
-    assert team.column("Bilal Khan", "Company name") == ["Northwind"]
+    assert team.column(KHURAM, "Company name") == ["Northwind"]
+    assert team.column(KHURAM, "BD") == ["Bilal Khan"]
+    assert "Ayesha Raza" not in team.tabs() and "Bilal Khan" not in team.tabs()
+
+
+def test_reassigning_a_profile_rewrites_its_tab_with_the_new_bd(client, manager,
+                                                                on):
+    """Nothing about the rows changed, so only the holder can tell it to."""
+    hers, ayesha, khuram, _his, bilal, _hamza = crew(client, manager)
+    for n in (1, 2):
+        log(client, hers, khuram["id"], company=f"Northwind {n}", title="Engineer",
+            url=f"https://www.linkedin.com/jobs/view/391200000{n}")
+    team = Paper()
+    pass_over(team, khuram)
+    assert pass_over(team, khuram)["rebuilt"] is False
+
+    client.patch(f"/profiles/{khuram['id']}", headers=manager,
+                 json={"user_id": bilal["id"]})
+    result = pass_over(team, khuram)
+
+    assert result["rebuilt"] is True
+    assert team.pages[KHURAM][0] == sheets.APPLIED_COLUMNS
+    assert team.column(KHURAM, "Company name") == ["Northwind 1", "Northwind 2"]
+    assert team.column(KHURAM, "BD") == ["Bilal Khan", "Bilal Khan"]
+    # Settled again: the next pass has nothing to do.
+    assert pass_over(team, khuram)["rebuilt"] is False
+
+    # Taken off everybody, it says so rather than keeping the last name.
+    client.patch(f"/profiles/{khuram['id']}", headers=manager,
+                 json={"user_id": None})
+    assert pass_over(team, khuram)["rebuilt"] is True
+    assert team.column(KHURAM, "BD") == ["—", "—"]
+
+
+def test_found_by_is_the_finders_bd_not_the_finders_profile(client, manager, on):
+    hers, ayesha, khuram, his, bilal, hamza = crew(client, manager)
+    log(client, hers, khuram["id"], company="Northwind", title="Engineer",
+        url="https://www.linkedin.com/jobs/view/3912000001")
+    apply_for_first_handed(client, his, hamza)
+
+    team = Paper()
+    pass_over(team, hamza)
+    row = dict(zip(sheets.APPLIED_COLUMNS, team.body(HAMZA)[0]))
+    assert row["Found by"] == "Ayesha Raza"
+    assert row["Found by"] != KHURAM
+    assert row["BD"] == "Bilal Khan"
+
+    # A finder nobody holds any more credits nobody.
+    client.patch(f"/profiles/{khuram['id']}", headers=manager,
+                 json={"user_id": None})
+    fresh = Paper()
+    pass_over(fresh, hamza)
+    assert fresh.column(HAMZA, "Found by") == ["—"]
 
 
 # --------------------------------------------------------------------------- #
-# Somebody hired this afternoon
+# A profile added this afternoon
 # --------------------------------------------------------------------------- #
 
-def test_a_new_bd_gets_a_tab_on_the_next_pass(client, manager, on, monkeypatch):
-    """Nobody configures anything: the tab list is the BD list."""
+def test_a_new_profile_gets_a_tab_on_the_next_pass(client, manager, on,
+                                                   monkeypatch):
+    """Nobody configures anything: the tab list is the profile list."""
     crew(client, manager)
     team, boss = Paper(), Paper()
     whole_pass(monkeypatch, team, boss)
-    assert "Sana Iqbal" not in team.tabs()
+    assert "Noor — Frontend" not in team.tabs()
 
     sana = make_bd(client, manager, "Sana Iqbal", "sana@mbs.co")
     noor = make_profile(client, manager, "Noor — Frontend", sana["id"])
     whole_pass(monkeypatch, team, boss)
 
-    assert "Sana Iqbal" in team.tabs()
-    assert team.pages["Sana Iqbal"][0] == sheets.APPLIED_COLUMNS
+    assert "Noor — Frontend" in team.tabs()
+    assert team.pages["Noor — Frontend"][0] == sheets.APPLIED_COLUMNS
 
     hers = sign_in(client, "sana@mbs.co", "secret")
     log(client, hers, noor["id"], company="Sana Found This", title="Engineer",
         url="https://www.linkedin.com/jobs/view/3912009999")
     whole_pass(monkeypatch, team, boss)
 
-    assert team.column("Sana Iqbal", "Company name") == ["Sana Found This"]
+    assert team.column("Noor — Frontend", "Company name") == ["Sana Found This"]
+    assert team.column("Noor — Frontend", "BD") == ["Sana Iqbal"]
 
 
-def test_a_bd_with_no_profile_yet_still_gets_a_tab(client, manager, on,
-                                                   monkeypatch):
-    make_bd(client, manager, "Adnan", "adnan@mbs.co")
+def test_a_profile_with_no_bd_still_gets_a_tab(client, manager, on, monkeypatch):
+    make_profile(client, manager, "Adnan — Nobody Yet")
+    hers, ayesha, khuram, _his, _bilal, _hamza = crew(client, manager)
+    log(client, hers, khuram["id"], company="Northwind", title="Engineer",
+        url="https://www.linkedin.com/jobs/view/3912000001")
+    client.patch(f"/profiles/{khuram['id']}", headers=manager,
+                 json={"user_id": None})
+
     team, boss = Paper(), Paper()
     whole_pass(monkeypatch, team, boss)
 
-    assert team.pages["Adnan"] == [sheets.APPLIED_COLUMNS]
+    # Never held: headings and nothing else.
+    assert team.pages["Adnan — Nobody Yet"] == [sheets.APPLIED_COLUMNS]
+    # Held once, not now: the history stays, and nobody is named on it.
+    assert team.column(KHURAM, "Company name") == ["Northwind"]
+    assert team.column(KHURAM, "BD") == ["—"]
 
 
-def test_a_manager_who_holds_a_profile_is_not_dropped(client, manager, on,
-                                                      monkeypatch):
-    """Doing the work is what earns a tab, not the role on the account."""
-    mine = make_profile(client, manager, "Manager — Side Project", 1)
+def test_a_switched_off_profile_keeps_its_tab(client, manager, on, monkeypatch):
+    hers, ayesha, khuram, _his, _bilal, _hamza = crew(client, manager)
+    log(client, hers, khuram["id"], company="Northwind", title="Engineer",
+        url="https://www.linkedin.com/jobs/view/3912000001")
+    client.patch(f"/profiles/{khuram['id']}", headers=manager,
+                 json={"is_active": False})
+
+    team, boss = Paper(), Paper()
+    whole_pass(monkeypatch, team, boss)
+
+    assert team.column(KHURAM, "Company name") == ["Northwind"]
+
+
+def test_a_profile_a_manager_holds_names_the_manager(client, manager, on,
+                                                     monkeypatch):
+    """Doing the work is what puts a name on the row, not the account's role."""
+    me = client.get("/auth/me", headers=manager).json()
+    mine = make_profile(client, manager, "Manager — Side Project", me["id"])
     log(client, manager, mine["id"], company="Managers Own", title="Engineer",
         url="https://www.linkedin.com/jobs/view/3912000077")
 
     team, boss = Paper(), Paper()
     whole_pass(monkeypatch, team, boss)
 
-    assert "Manager" in team.tabs()
-    assert team.column("Manager", "Company name") == ["Managers Own"]
+    assert "Manager — Side Project" in team.tabs()
+    assert team.column("Manager — Side Project", "Company name") == ["Managers Own"]
+    assert team.column("Manager — Side Project", "BD") == [me["name"]]
+    assert team.column("Manager — Side Project", "Found by") == [me["name"]]
 
 
-def test_renaming_somebody_renames_their_tab_and_keeps_the_rows(client, manager,
-                                                                on, monkeypatch):
+def test_renaming_a_profile_renames_its_tab_and_keeps_the_rows(client, manager,
+                                                               on, monkeypatch):
     """A second tab with the same rows on it would be a record nobody can read."""
     hers, ayesha, khuram, _his, _bilal, _hamza = crew(client, manager)
     log(client, hers, khuram["id"], company="Northwind", title="Engineer",
         url="https://www.linkedin.com/jobs/view/3912000001")
     team, boss = Paper(), Paper()
     whole_pass(monkeypatch, team, boss)
-    assert team.column("Ayesha Raza", "Company name") == ["Northwind"]
+    assert team.column(KHURAM, "Company name") == ["Northwind"]
+
+    reply = client.patch(f"/profiles/{khuram['id']}", headers=manager,
+                         json={"name": "Khuram — ML Lead"})
+    assert reply.status_code == 200, reply.text
+    whole_pass(monkeypatch, team, boss)
+
+    assert KHURAM not in team.tabs()
+    assert team.column("Khuram — ML Lead", "Company name") == ["Northwind"]
+
+
+def test_renaming_a_bd_changes_the_bd_column_not_the_tab(client, manager, on,
+                                                        monkeypatch):
+    hers, ayesha, khuram, _his, _bilal, _hamza = crew(client, manager)
+    log(client, hers, khuram["id"], company="Northwind", title="Engineer",
+        url="https://www.linkedin.com/jobs/view/3912000001")
+    team, boss = Paper(), Paper()
+    whole_pass(monkeypatch, team, boss)
 
     client.patch(f"/users/{ayesha['id']}", headers=manager,
                  json={"name": "Ayesha R Khan"})
-    whole_pass(monkeypatch, team, boss)
+    whole_pass(monkeypatch, team, boss, rebuild=True)
 
-    assert "Ayesha Raza" not in team.tabs()
-    assert team.column("Ayesha R Khan", "Company name") == ["Northwind"]
+    assert KHURAM in team.tabs()
+    assert "Ayesha R Khan" not in team.tabs()
+    assert team.column(KHURAM, "BD") == ["Ayesha R Khan"]
 
 
 # --------------------------------------------------------------------------- #
@@ -472,7 +608,7 @@ def test_the_manager_tabs_are_not_in_the_team_file(client, manager, on,
     for tab in sheets.MANAGER_TABS:
         assert tab not in team.tabs()
         assert tab in boss.tabs()
-    assert "Ayesha Raza" not in boss.tabs()
+    assert KHURAM not in boss.tabs()
 
 
 def test_the_manager_file_is_rewritten_not_grown(client, manager, on, monkeypatch):
@@ -497,11 +633,11 @@ def test_the_manager_file_is_skipped_when_derived_is_off(client, manager, on,
     team, boss = Paper(), Paper()
     whole_pass(monkeypatch, team, boss, derived=False)
     assert boss.tabs() == {}
-    assert "Ayesha Raza" in team.tabs()
+    assert KHURAM in team.tabs()
 
 
 def test_one_file_alone_is_enough(client, manager, monkeypatch):
-    """A team that wants the BD tabs and no manager file still mirrors."""
+    """A team that wants the profile tabs and no manager file still mirrors."""
     monkeypatch.setenv("MBS_GOOGLE_CREDENTIALS", "{}")
     client.patch("/settings", headers=manager, json={"sheet_sync": True})
     client.put("/sheets", headers=manager,
@@ -513,7 +649,7 @@ def test_one_file_alone_is_enough(client, manager, monkeypatch):
     team, boss = Paper(), Paper()
     whole_pass(monkeypatch, team, boss)
 
-    assert team.column("Ayesha Raza", "Company name") == ["Northwind"]
+    assert team.column(KHURAM, "Company name") == ["Northwind"]
     assert boss.tabs() == {}
 
 
@@ -538,12 +674,12 @@ def test_imports_are_left_out_until_a_manager_says_otherwise(client, manager, on
     upload(client, hers, khuram["id"], sheet(job_rows(6, start=50)))
 
     team = Paper()
-    pass_over(team, ayesha)
-    assert team.column("Ayesha Raza", "Company name") == ["Typed By Hand"]
+    pass_over(team, khuram)
+    assert team.column(KHURAM, "Company name") == ["Typed By Hand"]
 
     client.patch("/settings", headers=manager, json={"sheet_sync_imports": True})
-    pass_over(team, ayesha)
-    assert len(team.body("Ayesha Raza")) == 7
+    pass_over(team, khuram)
+    assert len(team.body(KHURAM)) == 7
 
 
 # --------------------------------------------------------------------------- #
@@ -566,23 +702,23 @@ def test_a_tab_made_underneath_us_is_not_an_error(client, manager, on):
                 self._make(name)
 
     team = Racing()
-    team._make("Ayesha Raza")                  # somebody else got there first
-    result = pass_over(team, ayesha)
+    team._make(KHURAM)                  # somebody else got there first
+    result = pass_over(team, khuram)
 
     assert result["rebuilt"] is True
-    assert team.column("Ayesha Raza", "Company name") == ["Northwind"]
+    assert team.column(KHURAM, "Company name") == ["Northwind"]
 
 
 def test_a_failure_that_is_not_a_clash_still_raises(client, manager, on):
     """Only the one collision is swallowed; a real refusal must surface."""
-    _hers, ayesha, _k, _his, _bilal, _hamza = crew(client, manager)
+    _hers, _ayesha, khuram, _his, _bilal, _hamza = crew(client, manager)
 
     class Refusing(Paper):
         def add_tabs(self, names):
             raise RuntimeError("caller does not have permission")
 
     with pytest.raises(RuntimeError, match="permission"):
-        pass_over(Refusing(), ayesha)
+        pass_over(Refusing(), khuram)
 
 
 def test_a_tab_of_ours_that_was_deleted_is_written_again(client, manager, on):
@@ -591,14 +727,14 @@ def test_a_tab_of_ours_that_was_deleted_is_written_again(client, manager, on):
     log(client, hers, khuram["id"], company="Northwind", title="Engineer",
         url="https://www.linkedin.com/jobs/view/3912000001")
     team = Paper()
-    pass_over(team, ayesha)
+    pass_over(team, khuram)
 
-    team.delete_tabs([team.ids["Ayesha Raza"]])
-    result = pass_over(team, ayesha)
+    team.delete_tabs([team.ids[KHURAM]])
+    result = pass_over(team, khuram)
 
     assert result["rebuilt"] is True
-    assert team.pages["Ayesha Raza"][0] == sheets.APPLIED_COLUMNS
-    assert team.column("Ayesha Raza", "Company name") == ["Northwind"]
+    assert team.pages[KHURAM][0] == sheets.APPLIED_COLUMNS
+    assert team.column(KHURAM, "Company name") == ["Northwind"]
 
 
 def test_a_tab_made_by_hand_gets_its_headings(client, manager, on):
@@ -607,11 +743,11 @@ def test_a_tab_made_by_hand_gets_its_headings(client, manager, on):
     log(client, hers, khuram["id"], company="Northwind", title="Engineer",
         url="https://www.linkedin.com/jobs/view/3912000001")
 
-    team = Paper(existing=["Ayesha Raza"])
-    result = pass_over(team, ayesha)
+    team = Paper(existing=[KHURAM])
+    result = pass_over(team, khuram)
 
     assert result["rebuilt"] is True
-    assert team.pages["Ayesha Raza"][0] == sheets.APPLIED_COLUMNS
+    assert team.pages[KHURAM][0] == sheets.APPLIED_COLUMNS
 
 
 # --------------------------------------------------------------------------- #
@@ -636,7 +772,7 @@ def test_reset_empties_both_files_and_writes_them_again(client, manager, on,
     assert "Somebody's old notes" not in team.tabs()
     assert sheets.PLACEHOLDER not in team.tabs()
     assert sheets.PLACEHOLDER not in boss.tabs()
-    assert team.column("Ayesha Raza", "Company name") == ["Northwind"]
+    assert team.column(KHURAM, "Company name") == ["Northwind"]
     for tab in sheets.MANAGER_TABS:
         assert tab in boss.tabs()
 
@@ -687,25 +823,32 @@ def test_a_new_team_file_forgets_what_was_written_to_the_old_one(client,
     log(client, hers, khuram["id"], company="Northwind", title="Engineer",
         url="https://www.linkedin.com/jobs/view/3912000001")
     first = Paper()
-    pass_over(first, ayesha)
+    pass_over(first, khuram)
 
     client.put("/sheets", headers=manager, json={"team_sheet": "1ADifferentFile"})
 
     second = Paper()
-    result = pass_over(second, ayesha)
+    result = pass_over(second, khuram)
     assert result["rebuilt"] is True
-    assert second.column("Ayesha Raza", "Company name") == ["Northwind"]
+    assert second.column(KHURAM, "Company name") == ["Northwind"]
 
 
-def test_status_lists_both_files_and_every_bd(client, manager, on):
-    crew(client, manager)
+def test_status_lists_both_files_and_every_profile(client, manager, on):
+    _hers, _ayesha, khuram, _his, _bilal, hamza = crew(client, manager)
     body = client.get("/sheets", headers=manager).json()
 
     assert body["configured"] is True and body["on"] is True
     assert body["team_sheet"] == TEAM
     assert body["manager_sheet"] == BOSS
     assert body["manager_tabs"] == list(sheets.MANAGER_TABS)
-    assert sorted(b["tab"] for b in body["bds"]) == ["Ayesha Raza", "Bilal Khan"]
+    assert "bds" not in body
+    tabs = {t["tab"]: t for t in body["tabs"]}
+    assert sorted(tabs) == [HAMZA, KHURAM]
+    assert tabs[KHURAM]["profile_id"] == khuram["id"]
+    assert tabs[KHURAM]["target"] == f"profile:{khuram['id']}"
+    assert tabs[HAMZA]["name"] == HAMZA
+    for field in ("last_run", "last_error", "passes", "rows"):
+        assert field in tabs[HAMZA]
 
 
 def test_status_says_when_nothing_is_set_up(client, manager, monkeypatch):
@@ -774,8 +917,8 @@ def test_sync_now_runs_a_pass_and_reports_it(client, manager, on, monkeypatch):
 
     assert reply.status_code == 200, reply.text
     assert reply.json()["failed"] == []
-    assert team.column("Ayesha Raza", "Company name") == ["Northwind"]
-    listed = client.get("/sheets", headers=manager).json()["bds"]
+    assert team.column(KHURAM, "Company name") == ["Northwind"]
+    listed = client.get("/sheets", headers=manager).json()["tabs"]
     assert any(b["last_run"] for b in listed)
 
 
@@ -787,7 +930,7 @@ def test_one_tab_failing_does_not_stop_the_others(client, manager, on,
 
     class Awkward(Paper):
         def append(self, tab, rows):
-            if tab == "Bilal Khan":
+            if tab == HAMZA:
                 raise RuntimeError("caller does not have permission")
             super().append(tab, rows)
 
@@ -796,12 +939,12 @@ def test_one_tab_failing_does_not_stop_the_others(client, manager, on,
     reply = client.post("/sheets/sync", headers=manager)
 
     assert reply.status_code == 200, reply.text
-    assert reply.json()["failed"] == ["Bilal Khan"]
-    assert team.column("Ayesha Raza", "Company name") == ["Northwind"]
+    assert reply.json()["failed"] == [HAMZA]
+    assert team.column(KHURAM, "Company name") == ["Northwind"]
     listed = {b["name"]: b for b
-              in client.get("/sheets", headers=manager).json()["bds"]}
-    assert listed["Ayesha Raza"]["last_error"] is None
-    assert "permission" in listed["Bilal Khan"]["last_error"]
+              in client.get("/sheets", headers=manager).json()["tabs"]}
+    assert listed[KHURAM]["last_error"] is None
+    assert "permission" in listed[HAMZA]["last_error"]
 
 
 def test_the_manager_file_failing_is_reported_on_its_own(client, manager, on,
@@ -818,21 +961,22 @@ def test_the_manager_file_failing_is_reported_on_its_own(client, manager, on,
 
     assert reply.status_code == 200, reply.text
     assert reply.json()["failed"] == ["the manager's file"]
-    assert "Ayesha Raza" in team.tabs()      # the team's file went up regardless
+    assert KHURAM in team.tabs()             # the team's file went up regardless
 
 
-def test_sync_now_can_be_pointed_at_one_bd(client, manager, on, monkeypatch):
-    _hers, ayesha, _k, _his, _bilal, _hamza = crew(client, manager)
+def test_sync_now_can_be_pointed_at_one_profile(client, manager, on,
+                                                monkeypatch):
+    _hers, _ayesha, khuram, _his, _bilal, _hamza = crew(client, manager)
     team, boss = Paper(), Paper()
     both_files(monkeypatch, team, boss)
 
     reply = client.post("/sheets/sync", headers=manager,
-                        params={"target": f"bd:{ayesha['id']}"})
+                        params={"target": f"profile:{khuram['id']}"})
 
     assert reply.status_code == 200, reply.text
-    assert [one["name"] for one in reply.json()["tabs"]] == ["Ayesha Raza"]
-    assert "Bilal Khan" not in team.tabs()
-    # One person does not drag the manager's file along with them.
+    assert [one["name"] for one in reply.json()["tabs"]] == [KHURAM]
+    assert HAMZA not in team.tabs()
+    # One profile does not drag the manager's file along with them.
     assert boss.tabs() == {}
 
 

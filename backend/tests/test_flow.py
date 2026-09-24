@@ -101,7 +101,8 @@ def test_a_find_lands_on_every_other_profile(client, manager):
 
     for other in (one, two):
         handed = client.get(f"/profiles/{other['id']}/others", headers=headers).json()
-        assert [row["found_by"] for row in handed] == ["Khuram"]
+        # "Found by" names the BD who holds the finding profile, not the profile.
+        assert [row["found_by"] for row in handed] == ["Ayesha"]
 
 
 def test_the_same_posting_through_two_links_is_one_job(client, manager):
@@ -149,7 +150,8 @@ def test_a_paste_of_many_rows_saves_the_good_ones(client, manager):
         {"title": "B", "url": "https://www.linkedin.com/jobs/view/4000000002"},
         {"title": "", "url": ""},
     ]})
-    assert reply.json() == {"added": 2, "known": 0, "duplicate": 0, "unusable": 1}
+    assert reply.json() == {"added": 2, "known": 0, "duplicate": 0,
+                            "reapplied": 0, "unusable": 1}
 
 
 # --------------------------------------------------------------------------- #
@@ -251,7 +253,7 @@ def test_all_jobs_names_who_found_it_and_who_has_applied(client, manager):
     client.post(f"/assignments/{row['assignment_id']}", headers=headers,
                 json={"status": "applied"})
     pool = client.get("/jobs", headers=manager).json()
-    assert pool[0]["found_by"] == "Khuram"
+    assert pool[0]["found_by"] == "Ayesha"     # the BD, not the profile
     assert sorted(pool[0]["applied_by"]) == ["Khuram", "Zahid"]
 
 

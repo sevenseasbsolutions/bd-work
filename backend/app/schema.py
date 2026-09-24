@@ -7,7 +7,9 @@ request. This runs at boot, reads what is really there, and adds what is not.
 
 Only ever ADDs, and only with a default. It never drops, renames or retypes
 anything: a migration that can lose data is not something that should run
-unattended on somebody's laptop at start-up.
+unattended on somebody's laptop at start-up. The one exception is
+`drop_retired_constraints`, which removes a uniqueness rule — that loses no
+data, it only allows a row that used to be refused.
 """
 from __future__ import annotations
 
@@ -61,3 +63,32 @@ def sync_columns(engine: Engine) -> list[str]:
                 ))
                 added.append(f"{table.name}.{column.name}")
     return added
+
+
+# Uniqueness rules a later version of the models no longer has. `create_all`
+# never removes one, so a database made before the change keeps refusing rows
+# the code now means to write.
+RETIRED_CONSTRAINTS = (("applications", "uq_application"),)
+
+
+def drop_retired_constraints(engine: Engine) -> list[str]:
+    """Drop each retired constraint that is still there. Returns what it dropped.
+
+    Postgres only. SQLite cannot drop a constraint without rebuilding the table,
+    and the only SQLite databases here are the tests' and local development
+    ones, which `create_all` makes fresh without it.
+    """
+    if engine.dialect.name != "postgresql":
+        return []
+    dropped: list[str] = []
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        tables = set(inspector.get_table_names())
+        for table, name in RETIRED_CONSTRAINTS:
+            if table not in tables:
+                continue
+            present = {c["name"] for c in inspector.get_unique_constraints(table)}
+            if name in present:
+                connection.execute(text(f"ALTER TABLE {table} DROP CONSTRAINT {name}"))
+                dropped.append(f"{table}.{name}")
+    return dropped

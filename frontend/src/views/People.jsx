@@ -220,9 +220,9 @@ function SheetMirror() {
           </div>
         )}
 
-        {it.configured && (it.bds || []).length > 0 && (
+        {it.configured && (it.tabs || []).length > 0 && (
           <div style={{ marginTop: "var(--s5)" }}>
-            <span className="strong">Who has a tab</span>
+            <span className="strong">A tab per SSN profile</span>
             <div className="scroll" style={{ marginTop: "var(--s2)" }}>
               <table>
                 <thead>
@@ -230,7 +230,7 @@ function SheetMirror() {
                     <th>Last written</th></tr>
                 </thead>
                 <tbody>
-                  {(it.bds || []).map((b) => (
+                  {(it.tabs || []).map((b) => (
                     <tr key={b.target}>
                       <td className="strong">{b.tab}</td>
                       <td className="num">{b.rows}</td>
@@ -389,6 +389,10 @@ const NEW_PERSON = { name: "", email: "", password: "", role: "bd" };
 function Team({ users, onChange }) {
   const [form, setForm] = useState(NEW_PERSON);
   const [busy, setBusy] = useState(false);
+  // The person being edited in place, and what their row says so far.
+  const [editing, setEditing] = useState(null);
+  const [draft, setDraft] = useState({});
+  const change = (key) => (e) => setDraft((d) => ({ ...d, [key]: e.target.value }));
   const toast = useToast();
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
 
@@ -412,8 +416,25 @@ function Team({ users, onChange }) {
       await run();
       toast(said);
       onChange();
+      return true;
     } catch (e) {
       toast(e.message, "bad");
+      return false;
+    }
+  }
+
+  const startEdit = (person) => {
+    setEditing(person.id);
+    setDraft({ name: person.name, email: person.email, role: person.role, password: "" });
+  };
+
+  async function saveEdit(person) {
+    const body = { name: draft.name.trim(), email: draft.email.trim() };
+    if (draft.role !== person.role) body.role = draft.role;
+    // Blank means keep the password they have.
+    if (draft.password) body.password = draft.password;
+    if (await act(() => api.editUser(person.id, body), `${body.name} saved.`)) {
+      setEditing(null);
     }
   }
 
@@ -460,7 +481,30 @@ function Team({ users, onChange }) {
               <tr><th>Name</th><th>Email</th><th>Role</th><th>Profiles</th><th /></tr>
             </thead>
             <tbody>
-              {(users.data || []).map((person) => (
+              {(users.data || []).map((person) => editing === person.id ? (
+                <tr key={person.id}>
+                  <td><input type="text" value={draft.name} onChange={change("name")}
+                             aria-label="Name" /></td>
+                  <td><input type="email" value={draft.email} onChange={change("email")}
+                             aria-label="Email" /></td>
+                  <td>
+                    <select value={draft.role} onChange={change("role")} aria-label="Role">
+                      <option value="bd">BD</option>
+                      <option value="manager">Manager</option>
+                    </select>
+                  </td>
+                  <td><input type="text" value={draft.password} onChange={change("password")}
+                             placeholder="new password (blank = keep)"
+                             aria-label="New password" /></td>
+                  <td className="acts">
+                    <button className="btn sm primary"
+                            disabled={!draft.name.trim() || !draft.email.trim()}
+                            onClick={() => saveEdit(person)}>Save</button>
+                    {" "}
+                    <button className="btn sm" onClick={() => setEditing(null)}>Cancel</button>
+                  </td>
+                </tr>
+              ) : (
                 <tr key={person.id} style={person.is_active ? undefined : { opacity: 0.55 }}>
                   <td className="strong">{person.name}</td>
                   <td className="muted mono small">{person.email}</td>
@@ -472,6 +516,8 @@ function Team({ users, onChange }) {
                   </td>
                   <td className="muted small">{person.profiles.join(", ") || "—"}</td>
                   <td className="acts">
+                    <button className="btn sm" onClick={() => startEdit(person)}>Edit</button>
+                    {" "}
                     <button className="btn sm" onClick={() => act(
                       () => api.editUser(person.id, { is_active: !person.is_active }),
                       person.is_active ? `${person.name} can no longer sign in.`
@@ -503,6 +549,23 @@ function Identities({ profiles, users, onChange }) {
   const toast = useToast();
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
   const bds = users.filter((u) => u.role === "bd" && u.is_active);
+  const [editing, setEditing] = useState(null);
+  const [draft, setDraft] = useState({});
+  const change = (key) => (e) => setDraft((d) => ({ ...d, [key]: e.target.value }));
+
+  const startEdit = (p) => {
+    setEditing(p.id);
+    setDraft({ name: p.name, headline: p.headline || "", platform: p.platform || "",
+               skills: p.skills || "" });
+  };
+
+  async function saveEdit(p) {
+    const body = { name: draft.name.trim(), headline: draft.headline,
+                   platform: draft.platform, skills: draft.skills };
+    if (await act(() => api.editProfile(p.id, body), `${body.name} saved.`)) {
+      setEditing(null);
+    }
+  }
 
   async function add(event) {
     event.preventDefault();
@@ -532,8 +595,10 @@ function Identities({ profiles, users, onChange }) {
       await run();
       toast(said);
       onChange();
+      return true;
     } catch (e) {
       toast(e.message, "bad");
+      return false;
     }
   }
 
@@ -582,12 +647,31 @@ function Identities({ profiles, users, onChange }) {
             <tbody>
               {(profiles.data || []).map((p) => (
                 <tr key={p.id} style={p.is_active ? undefined : { opacity: 0.55 }}>
-                  <td>
-                    <span className="strong">{p.name}</span>
-                    {!p.is_active && <> <Chip kind="off">off</Chip></>}
-                    {p.headline && <span className="muted small"><br />{p.headline}</span>}
-                  </td>
-                  <td className="muted">{p.platform || "—"}</td>
+                  {editing === p.id ? (
+                    <>
+                      <td>
+                        <input type="text" value={draft.name} onChange={change("name")}
+                               aria-label="Profile name" />
+                        <input type="text" value={draft.headline} onChange={change("headline")}
+                               placeholder="Headline" aria-label="Headline"
+                               style={{ marginTop: 4 }} />
+                        <input type="text" value={draft.skills} onChange={change("skills")}
+                               placeholder="Skills" aria-label="Skills"
+                               style={{ marginTop: 4 }} />
+                      </td>
+                      <td><input type="text" value={draft.platform} onChange={change("platform")}
+                                 placeholder="Where" aria-label="Where" /></td>
+                    </>
+                  ) : (
+                    <>
+                      <td>
+                        <span className="strong">{p.name}</span>
+                        {!p.is_active && <> <Chip kind="off">off</Chip></>}
+                        {p.headline && <span className="muted small"><br />{p.headline}</span>}
+                      </td>
+                      <td className="muted">{p.platform || "—"}</td>
+                    </>
+                  )}
                   <td>
                     {/* Reassigning is the same control as assigning. A profile
                         moving between BDs takes its whole history with it. */}
@@ -606,6 +690,20 @@ function Identities({ profiles, users, onChange }) {
                   <td className="num">{p.counts?.skipped ?? 0}</td>
                   <td className="num">{p.counts?.pending ?? 0}</td>
                   <td className="acts">
+                    {editing === p.id ? (
+                      <>
+                        <button className="btn sm primary" disabled={!draft.name.trim()}
+                                onClick={() => saveEdit(p)}>Save</button>
+                        {" "}
+                        <button className="btn sm" onClick={() => setEditing(null)}>Cancel</button>
+                        {" "}
+                      </>
+                    ) : (
+                      <>
+                        <button className="btn sm" onClick={() => startEdit(p)}>Edit</button>
+                        {" "}
+                      </>
+                    )}
                     <button className="btn sm" onClick={() => act(
                       () => api.editProfile(p.id, { is_active: !p.is_active }),
                       p.is_active

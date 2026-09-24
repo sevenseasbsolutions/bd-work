@@ -120,14 +120,15 @@ class Job(Base):
 
 
 class Application(Base):
-    """This profile has approached this job. All-time, never re-issued.
+    """This profile has approached this job.
 
-    Unique per (job, PROFILE) and not per (job, user): one BD's two profiles
-    are two different candidates to a client and may both apply. Only the same
-    identity twice is forbidden.
+    Normally once per (job, PROFILE): the entry grid warns when the BD has
+    applied for the posting before, under this profile or any other they run,
+    and files nothing until they say so. A BD who presses Ignore is reapplying
+    on purpose, and that second application is a second row — which is why
+    there is no unique constraint here any more (schema.py drops the old one).
     """
     __tablename__ = "applications"
-    __table_args__ = (UniqueConstraint("job_id", "profile_id", name="uq_application"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), index=True)
@@ -173,6 +174,9 @@ class Assignment(Base):
     job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), index=True)
     profile_id: Mapped[int] = mapped_column(ForeignKey("profiles.id"), index=True)
     status: Mapped[str] = mapped_column(String(16), default="pending")
+    # Why the BD turned it down. Asked for on every Skip, cleared when the row
+    # goes back to pending or is applied for.
+    skip_reason: Mapped[str] = mapped_column(String(300), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     status_changed_at: Mapped[datetime | None] = mapped_column(DateTime)
 

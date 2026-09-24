@@ -208,17 +208,22 @@ export const api = {
 
   own: (id, range) => call(`/profiles/${id}/own${span(range)}`),
   logOwn: (id, jobs) => call(`/profiles/${id}/own`, { method: "POST", body: { jobs } }),
+  // Before filing: which of these lines has this BD applied for already, and
+  // when. Writes nothing.
+  checkOwn: (id, jobs) =>
+    call(`/profiles/${id}/own/check`, { method: "POST", body: { jobs } }),
   dropOwn: (id, applicationId) =>
     call(`/profiles/${id}/own/${applicationId}`, { method: "DELETE" }),
 
   others: (id, status = "pending", range) =>
     call(`/profiles/${id}/others${span(range, `status=${status}`)}`),
-  move: (assignmentId, status, applied_on = "") =>
-    call(`/assignments/${assignmentId}`, { method: "POST", body: { status, applied_on } }),
+  move: (assignmentId, status, applied_on = "", reason = "") =>
+    call(`/assignments/${assignmentId}`,
+         { method: "POST", body: { status, applied_on, reason } }),
   // Select all, then Applied or Skip. One request whether it is four rows or
   // four thousand.
-  moveMany: (ids, status, applied_on = "") =>
-    call("/assignments/bulk", { method: "POST", body: { ids, status, applied_on } }),
+  moveMany: (ids, status, applied_on = "", reason = "") =>
+    call("/assignments/bulk", { method: "POST", body: { ids, status, applied_on, reason } }),
 
   // The old sheet, and the record of every one uploaded before it.
   importSheet: (id, file) => upload(`/profiles/${id}/import`, file),

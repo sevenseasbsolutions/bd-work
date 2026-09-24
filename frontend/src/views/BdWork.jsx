@@ -217,6 +217,35 @@ function OwnJobs({ profile, range, readOnly, onChange }) {
 
 /* ── Others' jobs ─────────────────────────────────────────────────────── */
 
+// Offered as suggestions under the reason box; anything else can be typed.
+const SKIP_REASONS = ["Not a skill match", "Budget too low", "Location / time zone",
+                      "Client looks unreliable", "Posting is closed", "Too many applicants"];
+
+/** The box a Skip asks for its reason in. Enter skips, Escape backs out. */
+function SkipReason({ busy, onSkip, onCancel, label = "Skip" }) {
+  const [reason, setReason] = useState("");
+  const ready = reason.trim().length > 0;
+  return (
+    <span className="row" style={{ gap: "var(--s2)", justifyContent: "flex-end" }}>
+      <input type="text" autoFocus list="skip-reasons" value={reason}
+             placeholder="Why skip it?" maxLength={300}
+             style={{ minWidth: 180, flex: "1 1 180px" }}
+             onChange={(e) => setReason(e.target.value)}
+             onKeyDown={(e) => {
+               if (e.key === "Enter" && ready) onSkip(reason.trim());
+               if (e.key === "Escape") onCancel();
+             }} />
+      <datalist id="skip-reasons">
+        {SKIP_REASONS.map((r) => <option key={r} value={r} />)}
+      </datalist>
+      <button className="btn sm" disabled={busy || !ready}
+              title={ready ? undefined : "Say why first"}
+              onClick={() => onSkip(reason.trim())}>{label}</button>
+      <button className="link" disabled={busy} onClick={onCancel}>Cancel</button>
+    </span>
+  );
+}
+
 function OthersJobs({ profile, range, readOnly, selectAll, onChange }) {
   const [status, setStatus] = useState("pending");
   const rows = useLoad(() => api.others(profile.id, status, range),
@@ -225,6 +254,8 @@ function OthersJobs({ profile, range, readOnly, selectAll, onChange }) {
   // that Select all is one change and not one per row.
   const [picked, setPicked] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
+  // The row whose Skip is waiting for a reason, or "bulk" for the ticked ones.
+  const [skipping, setSkipping] = useState(null);
   const toast = useToast();
 
   const list = rows.data || [];
@@ -233,7 +264,7 @@ function OthersJobs({ profile, range, readOnly, selectAll, onChange }) {
   // A tick only means anything while the row it is on is on screen. Changing
   // tab, profile or date range leaves that list behind, and a selection that
   // outlived its list is a press nobody can predict the result of.
-  useEffect(() => { setPicked(new Set()); },
+  useEffect(() => { setPicked(new Set()); setSkipping(null); },
             [profile.id, status, range.since, range.until]);
 
   const shown = useMemo(() => new Set(list.map((job) => job.assignment_id)), [list]);
@@ -249,9 +280,10 @@ function OthersJobs({ profile, range, readOnly, selectAll, onChange }) {
 
   const tickAll = () => setPicked(all ? new Set() : new Set(shown));
 
-  async function move(assignmentId, next) {
+  async function move(assignmentId, next, reason = "") {
     try {
-      await api.move(assignmentId, next);
+      await api.move(assignmentId, next, "", reason);
+      setSkipping(null);
       toast(next === "applied" ? "Marked as applied."
         : next === "skipped" ? "Turned down." : "Back on the list.");
       rows.reload();
@@ -262,11 +294,12 @@ function OthersJobs({ profile, range, readOnly, selectAll, onChange }) {
   }
 
   /** The same move, for everything ticked, in one request. */
-  async function moveChosen(next) {
+  async function moveChosen(next, reason = "") {
     if (!chosen.length || busy) return;
     setBusy(true);
     try {
-      const done = await api.moveMany(chosen, next);
+      const done = await api.moveMany(chosen, next, "", reason);
+      setSkipping(null);
       const word = next === "applied" ? "marked as applied"
         : next === "skipped" ? "turned down" : "back on the list";
       toast(`${done.moved} ${done.moved === 1 ? "job" : "jobs"} ${word}.`
@@ -305,7 +338,7 @@ function OthersJobs({ profile, range, readOnly, selectAll, onChange }) {
           )
         )}
         <span className="spacer" />
-        <span className="muted small">Found by other profiles and handed to this one.</span>
+        <span className="muted small">Found by other BDs and handed to this profile.</span>
       </div>
 
       {/* The bar exists only while something is ticked. An empty one would be a
@@ -318,7 +351,11 @@ function OthersJobs({ profile, range, readOnly, selectAll, onChange }) {
             {(range.since || range.until) ? " in this date range" : ""}
           </span>
           <span className="spacer" />
-          {status === "pending" ? (
+          {status === "pending" && skipping === "bulk" ? (
+            <SkipReason busy={busy} label={`Skip · ${chosen.length}`}
+                        onSkip={(reason) => moveChosen("skipped", reason)}
+                        onCancel={() => setSkipping(null)} />
+          ) : status === "pending" ? (
             <>
               <button className="btn sm ok" disabled={busy}
                       title="Mark every selected job as applied for"
@@ -327,7 +364,7 @@ function OthersJobs({ profile, range, readOnly, selectAll, onChange }) {
               </button>
               <button className="btn sm" disabled={busy}
                       title="Turn down every selected job"
-                      onClick={() => moveChosen("skipped")}>
+                      onClick={() => setSkipping("bulk")}>
                 {busy ? "Working…" : `Skip · ${chosen.length}`}
               </button>
             </>
@@ -361,6 +398,7 @@ function OthersJobs({ profile, range, readOnly, selectAll, onChange }) {
                 )}
                 <th>Company</th><th>Job title</th><th>Job link</th><th>Platform</th>
                 <th>Found by</th><th>Already applied</th>
+                {status === "skipped" && <th>Skip reason</th>}
                 {!readOnly && <th className="acts" />}
               </tr>
             </thead>
@@ -386,14 +424,20 @@ function OthersJobs({ profile, range, readOnly, selectAll, onChange }) {
                         cover letter, not after. */}
                     {job.applied_by.length ? job.applied_by.join(", ") : "nobody yet"}
                   </td>
+                  {status === "skipped" && (
+                    <td className="small">{job.skip_reason || <span className="muted">—</span>}</td>
+                  )}
                   {!readOnly && (
                     <td className="acts">
-                      {status === "pending" ? (
+                      {status === "pending" && skipping === job.assignment_id ? (
+                        <SkipReason onSkip={(reason) => move(job.assignment_id, "skipped", reason)}
+                                    onCancel={() => setSkipping(null)} />
+                      ) : status === "pending" ? (
                         <span className="row" style={{ justifyContent: "flex-end", gap: "var(--s2)" }}>
                           <button className="btn sm ok"
                                   onClick={() => move(job.assignment_id, "applied")}>Applied</button>
                           <button className="btn sm"
-                                  onClick={() => move(job.assignment_id, "skipped")}>Skip</button>
+                                  onClick={() => setSkipping(job.assignment_id)}>Skip</button>
                         </span>
                       ) : (
                         <button className="btn sm"

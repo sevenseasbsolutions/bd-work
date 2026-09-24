@@ -90,7 +90,7 @@ def test_a_sheet_lands_as_own_jobs_and_on_everybody_elses_list(client, manager):
     pending = client.get(f"/profiles/{bilal['id']}/others",
                          headers=theirs, params={"status": "pending"}).json()
     assert len(pending) == 12
-    assert pending[0]["found_by"] == ayesha["name"]
+    assert pending[0]["found_by"] == "Ayesha"   # the BD holding the finder
 
 
 def test_every_line_is_accounted_for(client, manager):

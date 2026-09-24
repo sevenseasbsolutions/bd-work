@@ -8,6 +8,13 @@
  * and the role first, the link second, and the last two are filled in for you:
  *
  *     Company name · Job title · Job link · Job platform · Email · Date
+ *
+ * Before anything is filed the lines are checked against every job this BD
+ * has applied for, under any of their profiles. A match is not filed: the
+ * line gets a warning saying where and when they applied, with **Ignore**
+ * (file it anyway — a deliberate reapplication) and **Don't add**. The link
+ * is checked as soon as it is typed, too, so the warning comes before the
+ * rest of the line has been filled in.
  */
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
@@ -27,8 +34,19 @@ export const COLUMNS = [
 // file an untouched line as work.
 const IDENTIFYING = ["company", "title", "url"];
 const isEmpty = (row) => IDENTIFYING.every((key) => !String(row[key] || "").trim());
-const blank = (email = "") => ({ company: "", title: "", url: "", platform: "",
-                                 email, date: today() });
+// `uid` identifies a line across edits, pastes and removals, so a warning stays
+// attached to the line it is about. `reapply` is set by Ignore.
+let nextUid = 1;
+const blank = (email = "") => ({ uid: nextUid++, company: "", title: "", url: "",
+                                 platform: "", email, date: today(), reapply: false });
+const toJob = (row) => ({
+  company: row.company, title: row.title, url: row.url, platform: row.platform,
+  email: row.email, applied_on: row.date, reapply: !!row.reapply,
+});
+
+/** "applied on 2026-09-20 under Khuram — AI Engineer (this profile)". */
+const where = (hit) => `${hit.applied_on} under ${hit.profile}`
+  + (hit.this_profile ? " (this profile)" : "");
 
 export default function EntryGrid({ profile, onSaved }) {
   // The boards the manager keeps. Loaded rather than hard-coded, so adding one
@@ -36,6 +54,13 @@ export default function EntryGrid({ profile, onSaved }) {
   const platforms = useLoad(() => api.platforms(), []);
   const [rows, setRows] = useState([]);
   const [busy, setBusy] = useState(false);
+  // uid -> the earlier applications that line matches. A line with an entry
+  // here is not filed until the BD presses Ignore or takes it out.
+  const [warnings, setWarnings] = useState({});
+  // Whether the warnings on screen stopped a Save. Only then does clearing the
+  // last one finish that Save; a warning raised while typing the link waits
+  // for the BD to finish the line.
+  const saveWaiting = useRef(false);
   // The address the last line went out from, carried into the next one: people
   // apply from one inbox all morning, and retyping it every line is the kind of
   // friction that ends with the column left empty.
@@ -44,7 +69,7 @@ export default function EntryGrid({ profile, onSaved }) {
   const toast = useToast();
 
   // A profile switch must not carry the half-typed line for the last one over.
-  useEffect(() => { setRows([]); }, [profile.id]);
+  useEffect(() => { setRows([]); setWarnings({}); }, [profile.id]);
 
   useEffect(() => {
     if (!focusOn.current) return;
@@ -54,31 +79,85 @@ export default function EntryGrid({ profile, onSaved }) {
 
   const edit = (index, key, value) => setRows((current) => {
     const next = [...current];
-    next[index] = { ...next[index], [key]: value };
+    // Changing what identifies the line makes it a different job, so an
+    // earlier Ignore no longer covers it and an old warning no longer fits.
+    const changesJob = IDENTIFYING.includes(key);
+    next[index] = { ...next[index], [key]: value,
+                    ...(changesJob ? { reapply: false } : {}) };
+    if (changesJob) forget(next[index].uid);
     if (key === "email") lastEmail.current = value;
     return next;
   });
 
-  const filled = rows.filter((row) => !isEmpty(row));
+  const forget = (uid) => setWarnings((current) => {
+    if (!(uid in current)) return current;
+    const next = { ...current };
+    delete next[uid];
+    return next;
+  });
 
-  /** File what is filled in. Returns whether anything went. */
-  async function commit() {
-    if (!filled.length) return false;
+  const filled = rows.filter((row) => !isEmpty(row));
+  const waiting = Object.keys(warnings).length;
+
+  /** Ask the server which of `lines` this BD has already applied for.
+   *  Returns {uid: applied[]} for the ones not already Ignored. */
+  async function findRepeats(lines) {
+    const asking = lines.filter((row) => !row.reapply);
+    if (!asking.length) return {};
+    const reply = await api.checkOwn(profile.id, asking.map(toJob));
+    const found = {};
+    for (const match of reply.matches) found[asking[match.index].uid] = match.applied;
+    return found;
+  }
+
+  /** The link was just typed: warn now rather than at Save. Never blocks. */
+  async function checkLine(row) {
+    if (isEmpty(row) || row.reapply) return;
+    try {
+      const found = await findRepeats([row]);
+      setWarnings((current) => {
+        const next = { ...current };
+        if (found[row.uid]) next[row.uid] = found[row.uid];
+        else delete next[row.uid];
+        return next;
+      });
+    } catch {
+      /* a failed check is not a reason to stop typing; Save checks again */
+    }
+  }
+
+  /** File what is filled in. Returns whether anything went.
+   *
+   *  `lines` is passed when the caller has just changed the rows (Ignore,
+   *  Don't add) and state has not caught up yet. */
+  async function commit(lines = rows) {
+    const toFile = lines.filter((row) => !isEmpty(row));
+    if (!toFile.length) return false;
     setBusy(true);
     try {
-      const tally = await api.logOwn(profile.id, filled.map((row) => ({
-        company: row.company, title: row.title, url: row.url,
-        platform: row.platform, email: row.email, applied_on: row.date,
-      })));
-      // All four outcomes, not just the happy one: a block of thirty where two
+      const found = await findRepeats(toFile);
+      if (Object.keys(found).length) {
+        setWarnings(found);
+        saveWaiting.current = true;
+        const n = Object.keys(found).length;
+        toast(`${n} ${n === 1 ? "line was" : "lines were"} applied for before. `
+          + "Ignore to add anyway, or take the line out.", "bad");
+        return false;
+      }
+      setWarnings({});
+      saveWaiting.current = false;
+      const tally = await api.logOwn(profile.id, toFile.map(toJob));
+      // Every outcome, not just the happy one: a block of thirty where two
       // were already on record is exactly the case that needs saying out loud.
       const said = [
         tally.added && `${tally.added} new`,
         tally.known && `${tally.known} already in the pool`,
+        tally.reapplied && `${tally.reapplied} reapplied`,
         tally.duplicate && `${tally.duplicate} you had already applied for`,
         tally.unusable && `${tally.unusable} with nothing to identify them`,
       ].filter(Boolean).join(", ");
-      toast(said || "Nothing to file.", tally.added || tally.known ? "ok" : "bad");
+      toast(said || "Nothing to file.",
+            tally.added || tally.known || tally.reapplied ? "ok" : "bad");
       setRows([]);
       onSaved();
       return true;
@@ -87,6 +166,24 @@ export default function EntryGrid({ profile, onSaved }) {
       return false;
     } finally {
       setBusy(false);
+    }
+  }
+
+  /** Ignore: file this line anyway. The last warning cleared files the lot. */
+  function ignore(uid) {
+    const next = rows.map((row) => (row.uid === uid ? { ...row, reapply: true } : row));
+    setRows(next);
+    forget(uid);
+    if (waiting === 1 && saveWaiting.current) commit(next);
+  }
+
+  /** Don't add: take the line out. The last warning cleared files the rest. */
+  function dontAdd(uid) {
+    const next = rows.filter((row) => row.uid !== uid);
+    setRows(next);
+    forget(uid);
+    if (waiting === 1 && saveWaiting.current && next.some((row) => !isEmpty(row))) {
+      commit(next);
     }
   }
 
@@ -122,7 +219,11 @@ export default function EntryGrid({ profile, onSaved }) {
       grid.forEach((cells, down) => {
         const target = index + down;
         if (!next[target]) next[target] = blank(lastEmail.current);
-        else next[target] = { ...next[target] };
+        else {
+          // Pasted over, it is a different job: any Ignore or warning is stale.
+          next[target] = { ...next[target], reapply: false };
+          forget(next[target].uid);
+        }
         cells.forEach((cell, across) => {
           const column = COLUMNS[start + across];
           if (column) next[target][column.key] = cell.trim();
@@ -132,7 +233,10 @@ export default function EntryGrid({ profile, onSaved }) {
     });
   }
 
-  const removeRow = (index) => setRows((current) => current.filter((_, i) => i !== index));
+  const removeRow = (index) => {
+    forget(rows[index]?.uid);
+    setRows((current) => current.filter((_, i) => i !== index));
+  };
 
   return (
     <div style={{ marginBottom: "var(--s5)" }}>
@@ -140,7 +244,7 @@ export default function EntryGrid({ profile, onSaved }) {
         <h2>Log a job {profile.name} found</h2>
         <span className="spacer" />
         {filled.length > 0 && (
-          <button className="link" disabled={busy} onClick={commit}>Save now</button>
+          <button className="link" disabled={busy} onClick={() => commit()}>Save now</button>
         )}
         <button className="btn primary" disabled={busy} onClick={addRow}>
           {busy ? "Saving…" : "+ New entry"}
@@ -167,7 +271,8 @@ export default function EntryGrid({ profile, onSaved }) {
               </thead>
               <tbody>
                 {rows.map((row, index) => (
-                  <tr key={index}>
+                  <React.Fragment key={row.uid}>
+                  <tr className={warnings[row.uid] ? "warned" : undefined}>
                     <td className="mono muted num">{index + 1}</td>
                     {COLUMNS.map((column) => (
                       <td key={column.key} style={{ padding: 3 }}>
@@ -197,6 +302,7 @@ export default function EntryGrid({ profile, onSaved }) {
                                  style={column.key === "date"
                                    ? { fontFamily: "var(--mono)", fontSize: 12 } : undefined}
                                  onChange={(e) => edit(index, column.key, e.target.value)}
+                                 onBlur={column.key === "url" ? () => checkLine(row) : undefined}
                                  onPaste={(e) => onPaste(index, column.key, e)}
                                  onKeyDown={(e) => {
                                    // Enter on the last line files it and opens
@@ -215,6 +321,34 @@ export default function EntryGrid({ profile, onSaved }) {
                               onClick={() => removeRow(index)}>×</button>
                     </td>
                   </tr>
+                  {warnings[row.uid] && (
+                    <tr className="repeat">
+                      <td />
+                      <td colSpan={COLUMNS.length + 1}>
+                        <div className="row" style={{ gap: "var(--s2)", flexWrap: "wrap" }}>
+                          <span>
+                            <b>You already applied for this job</b> —{" "}
+                            {warnings[row.uid].map(where).join("; ")}.
+                          </span>
+                          <span className="spacer" />
+                          <button className="btn sm" disabled={busy}
+                                  title="Add it anyway — you are reapplying on purpose"
+                                  onClick={() => ignore(row.uid)}>Ignore</button>
+                          <button className="btn sm" disabled={busy}
+                                  onClick={() => dontAdd(row.uid)}>Don&apos;t add</button>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  {row.reapply && !warnings[row.uid] && (
+                    <tr className="repeat ignored">
+                      <td />
+                      <td colSpan={COLUMNS.length + 1} className="muted small">
+                        Applied for before — will be added anyway.
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>

@@ -205,6 +205,11 @@ select.cell { color: var(--n8); }
    sideways on a narrow screen, rather than squeezing a date until it is
    unreadable. */
 table.entry { min-width: 880px; }
+/* A line this BD applied for before: the warning sits right under it. */
+table.entry tr.warned td { background: var(--warn-soft); }
+table.entry tr.repeat td { background: var(--warn-soft); color: var(--warn-text);
+                           border-top: 0; padding: 6px 8px; font-size: 13px; }
+table.entry tr.repeat.ignored td { background: transparent; }
 
 /* The date range. Its own strip above a screen's content, so it reads as
    something governing everything below it rather than as one more filter. */

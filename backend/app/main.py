@@ -28,7 +28,7 @@ from . import dispatch, exports, imports, settings, sheets
 from .db import Base, SessionLocal, engine, get_db
 from .models import (Application, Assignment, Import, ImportRow, Job, Platform,
                      Profile, User)
-from .schema import sync_columns
+from .schema import drop_retired_constraints, sync_columns
 from .security import (check_password, current_user, hash_password,
                        make_token, manager_only)
 
@@ -42,6 +42,7 @@ def boot() -> None:
     # create_all leaves an existing table alone, so a database made before a
     # column was added needs that column putting on. See schema.py.
     sync_columns(engine)
+    drop_retired_constraints(engine)
     with SessionLocal() as db:
         # The starting list of boards. Seeded only when the table is empty, so
         # a board the manager deletes does not come back on the next restart.
@@ -130,7 +131,9 @@ class UserIn(BaseModel):
 
 class UserPatch(BaseModel):
     name: str | None = None
+    email: EmailStr | None = None
     password: str | None = None
+    role: str | None = None
     is_active: bool | None = None
 
 
@@ -161,6 +164,9 @@ class JobIn(BaseModel):
     platform: str = ""
     email: str = ""
     applied_on: str = ""
+    # The Ignore button: the BD was told they applied for this before and is
+    # filing it again on purpose.
+    reapply: bool = False
 
 
 class FindsIn(BaseModel):
@@ -173,6 +179,8 @@ class FindsIn(BaseModel):
 class StatusIn(BaseModel):
     status: str
     applied_on: str = ""
+    # Why a job was skipped. The screen asks for it on every Skip.
+    reason: str = Field("", max_length=300)
 
 
 class PlatformIn(BaseModel):
@@ -189,6 +197,7 @@ class BulkIn(BaseModel):
     ids: list[int] = Field(min_length=1, max_length=5000)
     status: str
     applied_on: str = ""
+    reason: str = Field("", max_length=300)
 
 
 class SettingsIn(BaseModel):
@@ -285,9 +294,26 @@ def edit_user(user_id: int, body: UserPatch, db: Session = Depends(get_db),
     if not user:
         raise HTTPException(404, "No such person.")
     if body.name is not None:
-        user.name = body.name.strip()
+        if not body.name.strip():
+            raise HTTPException(400, "A person needs a name.")
+        user.name = body.name.strip()[:120]
+    if body.email is not None and body.email.lower() != user.email:
+        if db.scalar(select(User).where(User.email == body.email.lower(),
+                                        User.id != user.id)):
+            raise HTTPException(409, "Somebody already signs in with that email.")
+        user.email = body.email.lower()
     if body.password:
+        if len(body.password) < 4:
+            raise HTTPException(400, "A password needs at least 4 characters.")
         user.password_hash = hash_password(body.password)
+    if body.role is not None and body.role != user.role:
+        if body.role not in ("manager", "bd"):
+            raise HTTPException(400, "A person is either a manager or a BD.")
+        # The same lock-out as switching yourself off: the last screen that
+        # could make you a manager again is one only a manager can open.
+        if user.id == actor.id:
+            raise HTTPException(400, "You cannot change your own role.")
+        user.role = body.role
     if body.is_active is not None:
         # Switching yourself off would lock the workspace's only manager out of
         # the screen that could switch them back on.
@@ -464,11 +490,33 @@ def log_own(profile_id: int, body: FindsIn, db: Session = Depends(get_db),
     profile = reachable(profile_id, db, user)
     if user.role == "manager" and profile.user_id != user.id:
         raise HTTPException(403, "Only the BD who holds a profile logs its work.")
-    tally = {"added": 0, "known": 0, "duplicate": 0, "unusable": 0}
+    tally = {"added": 0, "known": 0, "duplicate": 0, "reapplied": 0, "unusable": 0}
     for row in body.jobs:
-        tally[dispatch.log_find(db, profile, row.model_dump())["status"]] += 1
+        line = row.model_dump()
+        tally[dispatch.log_find(db, profile, line,
+                                reapply=line.pop("reapply"))["status"]] += 1
     db.commit()
     return tally
+
+
+@app.post("/profiles/{profile_id}/own/check")
+def check_own(profile_id: int, body: FindsIn, db: Session = Depends(get_db),
+              user: User = Depends(current_user)) -> dict:
+    """Before filing: which of these lines has this BD applied for already?
+
+    Nothing is written. The entry grid calls this first and, for every line
+    that comes back, tells the BD where and when they applied, with an Ignore
+    button that files it anyway. Lines are matched the same way filing matches
+    them — by fingerprint — so "already applied" here and "duplicate" there
+    can never disagree.
+    """
+    profile = reachable(profile_id, db, user)
+    found = []
+    for index, row in enumerate(body.jobs):
+        hits = dispatch.earlier_applications(db, profile, row.model_dump())
+        if hits:
+            found.append({"index": index, "applied": hits})
+    return {"matches": found}
 
 
 @app.delete("/profiles/{profile_id}/own/{application_id}")
@@ -546,9 +594,9 @@ def move_many(body: BulkIn, db: Session = Depends(get_db),
 
     moved = 0
     for row in rows:
-        if row.status == body.status:
+        if row.status == body.status and not (body.status == "skipped" and body.reason):
             continue  # already there — not a move, and not worth counting as one
-        dispatch.set_status(db, row, body.status, body.applied_on)
+        dispatch.set_status(db, row, body.status, body.applied_on, body.reason)
         moved += 1
     db.commit()
     # `missing` is honest about a stale screen: rows ticked from a list that
@@ -567,9 +615,9 @@ def move(assignment_id: int, body: StatusIn, db: Session = Depends(get_db),
     reachable(row.profile_id, db, user)
     if body.status not in ("pending", "applied", "skipped"):
         raise HTTPException(400, "Status is pending, applied or skipped.")
-    dispatch.set_status(db, row, body.status, body.applied_on)
+    dispatch.set_status(db, row, body.status, body.applied_on, body.reason)
     db.commit()
-    return {"id": row.id, "status": row.status}
+    return {"id": row.id, "status": row.status, "skip_reason": row.skip_reason}
 
 
 @app.get("/profiles/{profile_id}/all")
@@ -800,12 +848,12 @@ def set_sheets(body: SheetIn, db: Session = Depends(get_db),
 
 @app.post("/sheets/sync")
 def sheet_sync_now(rebuild: bool = Query(False, description="write the tabs again"),
-                   target: str | None = Query(None, description="one BD only"),
+                   target: str | None = Query(None, description="one profile only"),
                    db: Session = Depends(get_db),
                    _: User = Depends(manager_only)) -> dict:
     """Run a pass now rather than waiting for the timer.
 
-    Both files, or one BD's tab with `target` — "bd:<id>". One tab failing does
+    Both files, or one profile's tab with `target` — "profile:<id>". One tab failing does
     not stop the others; what comes back says which ones went and which did not,
     so a 200 here is not a promise that everything was written.
 
@@ -823,7 +871,7 @@ def sheet_sync_now(rebuild: bool = Query(False, description="write the tabs agai
 
     done = sheets.one_pass(derived=True, rebuild=rebuild, only=target) or []
     if target and not done:
-        raise HTTPException(404, "Nobody by that name.")
+        raise HTTPException(404, "No profile by that id.")
     return {"tabs": done, "failed": [one["name"] for one in done
                                      if one.get("error")]}
 

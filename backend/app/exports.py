@@ -121,7 +121,7 @@ def safe_filename(name: str) -> str:
 OWN_COLUMNS = ["Company name", "Job title", "Job link", "Job platform",
                "Email", "Date", "Also applied"]
 OTHERS_COLUMNS = ["Company name", "Job title", "Job link", "Job platform",
-                  "Found by", "Status", "Already applied"]
+                  "Found by", "Status", "Already applied", "Skip reason"]
 ALL_COLUMNS = ["Company name", "Job title", "Job link", "Job platform",
                "Found by", "Applications", "Applied by", "This profile",
                "First seen"]
@@ -177,7 +177,7 @@ def others_table(db: Session, profile_id: int, since: date | None,
         for job in dispatch.others_jobs(db, profile_id, status, since, until):
             rows.append([job["company"], job["title"], job["url"], job["platform"],
                          job["found_by"], STANDING[status],
-                         ", ".join(job["applied_by"])])
+                         ", ".join(job["applied_by"]), job["skip_reason"]])
     return OTHERS_COLUMNS, rows
 
 

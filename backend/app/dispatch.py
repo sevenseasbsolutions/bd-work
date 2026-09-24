@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .matching import fingerprint
-from .models import Application, Assignment, Job, Profile, utcnow
+from .models import Application, Assignment, Job, Profile, User, utcnow
 
 
 # --------------------------------------------------------------------------- #
@@ -136,14 +136,20 @@ def backfill(db: Session, profile: Profile) -> int:
 
 
 def log_find(db: Session, profile: Profile, row: dict,
-             live: list[int] | None = None, import_id: int | None = None) -> dict:
+             live: list[int] | None = None, import_id: int | None = None,
+             reapply: bool = False) -> dict:
     """Record a job this profile found and applied for. The only way in.
 
     Returns {"status": ..., "job": Job}. `status` is one of:
       added      new posting, now on everybody else's list
       known      the posting was already in the pool; this profile joins it
       duplicate  this profile has applied for it before — nothing changes
+      reapplied  this profile had applied before, and the BD said file it anyway
       unusable   not enough typed to identify a posting at all
+
+    `reapply` is the entry grid's Ignore button: the BD was warned and is
+    applying again on purpose, so a second application is written instead of
+    the row being counted as a duplicate.
     """
     fp, _tier = fingerprint(row.get("url"), row.get("title"), row.get("company"))
     if not fp:
@@ -171,7 +177,7 @@ def log_find(db: Session, profile: Profile, row: dict,
 
     existing = db.scalar(select(Application).where(
         Application.job_id == job.id, Application.profile_id == profile.id))
-    if existing:
+    if existing and not reapply:
         return {"status": "duplicate", "job": job}
 
     # `import_id` marks where the line came from and nothing else. It is not a
@@ -190,19 +196,53 @@ def log_find(db: Session, profile: Profile, row: dict,
         standing.status_changed_at = utcnow()
 
     fan_out(db, job, profile.id, live)
-    return {"status": "added" if fresh else "known", "job": job}
+    return {"status": "added" if fresh else "reapplied" if existing else "known",
+            "job": job}
+
+
+def earlier_applications(db: Session, profile: Profile, row: dict) -> list[dict]:
+    """Where this BD has already applied for the posting in `row`, oldest first.
+
+    "This BD" is whoever holds the profile, across every profile they run —
+    the entry grid's warning is "you applied for this on the 12th", and the BD
+    means themselves, not only the identity they happen to have open. A profile
+    nobody holds is checked against itself alone.
+    """
+    fp, _tier = fingerprint(row.get("url"), row.get("title"), row.get("company"))
+    if not fp:
+        return []
+    job = db.scalar(select(Job).where(Job.fingerprint == fp))
+    if not job:
+        return []
+    query = (select(Application, Profile.name)
+             .join(Profile, Profile.id == Application.profile_id)
+             .where(Application.job_id == job.id))
+    query = query.where(Profile.user_id == profile.user_id if profile.user_id
+                        else Application.profile_id == profile.id)
+    hits = db.execute(query.order_by(Application.created_at, Application.id)).all()
+    return [{
+        "profile": name,
+        "profile_id": application.profile_id,
+        "this_profile": application.profile_id == profile.id,
+        "applied_on": (as_date(application.applied_on, application.created_at)
+                       or application.created_at.date()).isoformat(),
+        "source": application.source,
+        "company": job.company, "title": job.title, "url": job.url,
+    } for application, name in hits]
 
 
 def set_status(db: Session, assignment: Assignment, status: str,
-               applied_on: str = "") -> None:
+               applied_on: str = "", reason: str = "") -> None:
     """Apply for, or turn down, an others' job.
 
     Applying writes an Application with source 'others' — the row that makes
     the split on the manager's screen real. Undoing back to pending takes it
     away again, because an application nobody made should not be counted.
+    `reason` is kept only on a skip; any other move clears it.
     """
     assignment.status = status
     assignment.status_changed_at = utcnow()
+    assignment.skip_reason = reason.strip()[:300] if status == "skipped" else ""
 
     existing = db.scalar(select(Application).where(
         Application.job_id == assignment.job_id,
@@ -280,9 +320,10 @@ def others_jobs(db: Session, profile_id: int, status: str = "pending",
                 since: date | None = None, until: date | None = None) -> list[dict]:
     """What other profiles found and handed over, at one status."""
     rows = db.execute(
-        select(Assignment, Job, Profile.name)
+        select(Assignment, Job, User.name)
         .join(Job, Job.id == Assignment.job_id)
         .outerjoin(Profile, Profile.id == Job.found_by_id)
+        .outerjoin(User, User.id == Profile.user_id)
         .where(Assignment.profile_id == profile_id, Assignment.status == status)
         .order_by(Assignment.created_at.desc(), Assignment.id.desc())
     ).all()
@@ -293,6 +334,7 @@ def others_jobs(db: Session, profile_id: int, status: str = "pending",
     return [{
         "assignment_id": row.id,
         "status": row.status,
+        "skip_reason": row.skip_reason or "",
         "found_by": found_by or "",
         "applied_by": [w["profile"] for w in who.get(job.id, [])],
         **_job_dict(job),
@@ -311,7 +353,8 @@ def all_jobs(db: Session, profile_id: int | None = None, since: date | None = No
     on when the posting was first seen — "the jobs that came in that week".
     """
     rows = db.execute(
-        select(Job, Profile.name).outerjoin(Profile, Profile.id == Job.found_by_id)
+        select(Job, User.name).outerjoin(Profile, Profile.id == Job.found_by_id)
+        .outerjoin(User, User.id == Profile.user_id)
         .order_by(Job.first_seen.desc(), Job.id.desc())
     ).all()
     rows = [(job, found_by) for job, found_by in rows
