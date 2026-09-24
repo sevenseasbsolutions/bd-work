@@ -75,7 +75,7 @@ function Switches() {
           </div>
           <span className="spacer" />
           <button className="btn" disabled={busy} onClick={flip}>
-            {busy ? "Saving…" : on ? "Switch off" : "Switch on"}
+            {busy ? "Saving…" : on ? "Disable" : "Enable"}
           </button>
         </div>
       </State>
@@ -177,7 +177,7 @@ function SheetMirror() {
         <div className="wrap-row" style={{ marginTop: "var(--s4)" }}>
           <div style={{ flex: "1 1 320px", minWidth: 240 }}>
             <div className="row" style={{ gap: "var(--s2)" }}>
-              <span className="strong">Mirror work into them</span>
+              <span className="strong">Google Sheets</span>
               <Chip kind={on && it.configured ? "applied" : "off"}>
                 {on ? "on" : "off"}
               </Chip>
@@ -197,7 +197,7 @@ function SheetMirror() {
               </>
             )}
             <button className="btn" disabled={!!busy || !it.configured} onClick={flip}>
-              {busy === "flip" ? "Saving…" : on ? "Switch off" : "Switch on"}
+              {busy === "flip" ? "Saving…" : on ? "Disable" : "Enable"}
             </button>
           </div>
         </div>
@@ -212,19 +212,10 @@ function SheetMirror() {
                 <span className="strong">Uploaded sheets too</span>
                 <Chip kind={imports ? "applied" : "off"}>{imports ? "on" : "off"}</Chip>
               </div>
-              <p className="muted small" style={{ margin: "4px 0 0" }}>
-                With this off, only what a BD types into the entry grid reaches
-                their tab — somebody bringing three months of history across
-                does not bury today&apos;s work under thousands of old rows.
-                Switch it on and the next pass carries that history up; switch
-                it off again and those rows come back out. Either way your file
-                is unchanged: an imported row is an own job, and every total
-                says so.
-              </p>
             </div>
             <span className="spacer" />
             <button className="btn" disabled={!!busy} onClick={flipImports}>
-              {busy === "imports" ? "Saving…" : imports ? "Switch off" : "Switch on"}
+              {busy === "imports" ? "Saving…" : imports ? "Disable" : "Enable"}
             </button>
           </div>
         )}
@@ -485,7 +476,7 @@ function Team({ users, onChange }) {
                       () => api.editUser(person.id, { is_active: !person.is_active }),
                       person.is_active ? `${person.name} can no longer sign in.`
                         : `${person.name} can sign in again.`
-                    )}>{person.is_active ? "Switch off" : "Switch on"}</button>
+                    )}>{person.is_active ? "Disable" : "Enable"}</button>
                     {" "}
                     <Danger onConfirm={() => act(
                       () => api.removeUser(person.id),
@@ -620,7 +611,7 @@ function Identities({ profiles, users, onChange }) {
                       p.is_active
                         ? "Switched off. What it never worked has gone back."
                         : "Switched on, and caught up on the pool."
-                    )}>{p.is_active ? "Switch off" : "Switch on"}</button>
+                    )}>{p.is_active ? "Disable" : "Enable"}</button>
                     {" "}
                     <Danger title="Deletes this profile and its record. Permanent."
                             onConfirm={() => act(
