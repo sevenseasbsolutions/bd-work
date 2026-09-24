@@ -1,8 +1,5 @@
 __pycache__/
 *.py[cod]
-!frontend/package.json
-!frontend/package-lock.json
-!backend/**/*.schema.json
 client_secret_*.json
 .venv/
 node_modules/
@@ -15,3 +12,7 @@ dist/
 # server is handed this through MBS_GOOGLE_CREDENTIALS instead.
 *.json
 
+# Exceptions to *.json. Must come after it: the last matching rule wins.
+!frontend/package.json
+!frontend/package-lock.json
+!backend/**/*.schema.json
