@@ -125,8 +125,8 @@ fi
 say "Health check"
 ok=
 for _ in $(seq 1 30); do
-  if curl -fsS --max-time 2 http://127.0.0.1:8010/health >/dev/null \
-     && curl -fsS --max-time 2 -o /dev/null http://127.0.0.1:8011/; then
+  if curl -fsS --max-time 2 http://127.0.0.1:8010/health >/dev/null 2>&1 \
+     && curl -fsS --max-time 2 -o /dev/null http://127.0.0.1:8011/ 2>/dev/null; then
     ok=1; break
   fi
   sleep 1
