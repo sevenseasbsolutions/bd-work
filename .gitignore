@@ -16,3 +16,6 @@ dist/
 !frontend/package.json
 !frontend/package-lock.json
 !backend/**/*.schema.json
+
+# Commit that deploy/update.sh last put live.
+.deployed-rev
