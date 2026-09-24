@@ -30,6 +30,9 @@ die()  { printf '\n\033[1;31mx  %s\033[0m\n' "$*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "Run this with sudo."
 [[ -f "$APP/backend/.env" ]] || die "Missing $APP/backend/.env"
+# Without it the build silently falls back to http://127.0.0.1:8000 and nobody can sign in.
+grep -qE '^VITE_API=.+' "$APP/frontend/.env" 2>/dev/null \
+  || die "Missing VITE_API in $APP/frontend/.env (copy frontend/.env.example; it should say VITE_API=/api)"
 [[ -d "$NODE_BIN" ]] || die "Missing $NODE_BIN (node version changed? update this script and bd-work-web.service)"
 
 # Build steps run as the app user, never root, so nothing in the tree ends up root-owned.

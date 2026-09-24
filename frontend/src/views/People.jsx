@@ -72,13 +72,6 @@ function Switches() {
               <span className="strong">Select all on others&apos; jobs</span>
               <Chip kind={on ? "applied" : "off"}>{on ? "on" : "off"}</Chip>
             </div>
-            <p className="muted small" style={{ margin: "4px 0 0" }}>
-              A tick box on every row and one at the top of the list, so a BD
-              can mark a whole page applied for — or turn it down — in a single
-              press. With it off, the Applied and Skip buttons on each row are
-              the only way, which is what you want if a list that size should
-              be read rather than cleared.
-            </p>
           </div>
           <span className="spacer" />
           <button className="btn" disabled={busy} onClick={flip}>
@@ -173,23 +166,13 @@ function SheetMirror() {
           title="The team's file" busy={busy} disabled={!it.credentials}
           value={it.team_sheet} url={it.team_url}
           onSave={(link) => run("team", () => api.setSheets({ team_sheet: link }),
-                                "Pointed at that file. Every tab from nothing.")}
-          blurb={<>A tab per BD, named after them, carrying everything that
-            person has applied for across every profile they run — their own
-            finds and the others&apos; jobs they took on. Somebody hired this
-            afternoon has a tab within five seconds; nothing is set up per
-            person.</>} />
+                                "Pointed at that file. Every tab from nothing.")} />
 
         <SheetBox
           title="The manager's file" busy={busy} disabled={!it.credentials}
           value={it.manager_sheet} url={it.manager_url}
           onSave={(link) => run("boss", () => api.setSheets({ manager_sheet: link }),
-                                "Pointed at that file.")}
-          blurb={<>Your four screens, in a file of your own:{" "}
-            {(it.manager_tabs || []).join(" · ")}. Separate so a BD opening the
-            team&apos;s file does not scroll past the whole workspace&apos;s
-            totals to find their name — and so the numbers are not something
-            every BD has a link to.</>} />
+                                "Pointed at that file.")} />
 
         <div className="wrap-row" style={{ marginTop: "var(--s4)" }}>
           <div style={{ flex: "1 1 320px", minWidth: 240 }}>
@@ -199,11 +182,6 @@ function SheetMirror() {
                 {on ? "on" : "off"}
               </Chip>
             </div>
-            <p className="muted small" style={{ margin: "4px 0 0" }}>
-              A BD applies for a job — their own find or one handed to them —
-              and the row is on their tab about five seconds later. It only ever
-              writes; nothing typed into a spreadsheet comes back this way.
-            </p>
           </div>
           <span className="spacer" />
           <div className="row" style={{ gap: "var(--s2)" }}>
@@ -278,11 +256,6 @@ function SheetMirror() {
               </table>
             </div>
             <div className="row" style={{ marginTop: "var(--s3)" }}>
-              <span className="muted small">
-                Emptying takes out every tab in both files — MBS&apos;s and
-                anybody else&apos;s — then writes MBS&apos;s again from nothing.
-                The workspace is not touched.
-              </span>
               <span className="spacer" />
               <Danger title="Removes every tab in both spreadsheets, then writes MBS's again."
                       onConfirm={reset}>
@@ -302,7 +275,7 @@ function SheetMirror() {
  *  is shown as saved — so a link pasted and not saved never reads as if it is
  *  live, and one the server rejected does not linger looking accepted.
  */
-function SheetBox({ title, blurb, value, url, onSave, busy, disabled }) {
+function SheetBox({ title, value, url, onSave, busy, disabled }) {
   const [typed, setTyped] = useState(null);
   const link = typed === null ? (value || "") : typed;
   const changed = typed !== null && typed.trim() !== (value || "");
@@ -318,12 +291,7 @@ function SheetBox({ title, blurb, value, url, onSave, busy, disabled }) {
         <span className="strong">{title}</span>
         <Chip kind={value ? "applied" : "off"}>{value ? "set" : "not set"}</Chip>
       </div>
-      <p className="muted small" style={{ margin: "4px 0 var(--s2)" }}>
-        {blurb}{" "}
-        <strong>Share it with the service account as an Editor</strong> or
-        nothing will be written to it.
-      </p>
-      <div className="row" style={{ gap: "var(--s2)" }}>
+      <div className="row" style={{ gap: "var(--s2)", marginTop: "var(--s2)" }}>
         <input value={link} disabled={disabled || !!busy}
                placeholder="paste the Google Sheet link"
                style={{ flex: "1 1 260px", minWidth: 200 }}
@@ -461,8 +429,8 @@ function Team({ users, onChange }) {
   return (
     <div className="card">
       <header>
-        <h1>People</h1>
-        <span className="muted small">A manager runs the workspace; a BD works profiles.</span>
+        <h1>Add Roles of Employee</h1>
+        <span className="muted small">Roles are BD, Manager</span>
       </header>
 
       <form onSubmit={add} style={{ marginBottom: "var(--s5)" }}>
@@ -581,10 +549,8 @@ function Identities({ profiles, users, onChange }) {
   return (
     <div className="card">
       <header>
-        <h2>Profiles</h2>
-        <span className="muted small">
-          The identity a job is applied under. One BD may run several.
-        </span>
+        <h2>Add SSN Profile</h2>
+        <span className="muted small">To Assign BD and Developer</span>
       </header>
 
       <form onSubmit={add} style={{ marginBottom: "var(--s5)" }}>
