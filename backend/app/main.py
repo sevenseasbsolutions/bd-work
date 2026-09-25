@@ -711,7 +711,7 @@ async def import_sheet(profile_id: int, file: UploadFile = File(...),
     name = file.filename or "sheet.xlsx"
     before = imports.earlier_upload(db, profile.id, imports.digest_of(data))
     try:
-        batch = imports.run(db, profile, user, name, data)
+        batch, undated = imports.run(db, profile, user, name, data)
     except imports.SheetError as bad:
         raise HTTPException(400, str(bad))
 
@@ -720,6 +720,9 @@ async def import_sheet(profile_id: int, file: UploadFile = File(...),
         # Worth saying out loud rather than leaving somebody to wonder whether
         # they have just doubled three months of work.
         "same_file_as": before.created_at.isoformat() if before else None,
+        # Filed and applied, but with no date that could be read, so they
+        # count against today. Said so a BD can fix the column and re-upload.
+        "undated": undated,
     }
 
 

@@ -22,6 +22,12 @@ MBS_HEADERS = ["Company name", "Job title", "Job link", "Job platform",
                "Email", "Date"]
 
 
+# The Google Sheet mirror's tab, column for column (sheets.APPLIED_COLUMNS).
+GOOGLE_HEADERS = ["Applied on", "BD", "Company name", "Job title", "Job link",
+                  "Job platform", "Email", "Own or others", "Found by",
+                  "Filed at"]
+
+
 def sheet(rows, headers=None, lead_in=(), name="Jobs"):
     """An .xlsx as bytes. `lead_in` is whatever sits above the header row."""
     book = Workbook()
@@ -202,7 +208,8 @@ def test_headings_people_really_type_are_understood(client, manager):
     own = client.get(f"/profiles/{ayesha['id']}/own", headers=mine).json()
     assert own[0]["company"] == "Acme Corp"
     assert own[0]["platform"] == "Upwork"
-    assert own[0]["applied_on"] == "14/07/2026"
+    # Settled to one spelling on the way in, so every screen reads one day.
+    assert own[0]["applied_on"] == "2026-07-14"
 
 
 def test_a_header_row_that_is_not_the_first_row_is_found(client, manager):
@@ -266,24 +273,22 @@ def test_a_link_hidden_behind_the_word_apply_is_still_read(client, manager):
     assert own[0]["url"] == "https://acme.example.com/careers/246810"
 
 
-def test_a_workbook_exported_from_mbs_uploads_back_without_inventing_work(
-        client, manager):
-    """The Others' jobs sheet carries Pending and Skipped rows. Those are not
-    applications this profile made, and an upload must not turn them into any."""
+def test_a_status_column_never_holds_a_line_back(client, manager):
+    """Every line of an uploaded sheet is an application — Skipped, Pending
+    and Not applied included. A line withheld is data missed."""
     (mine, ayesha), (theirs, bilal) = workspace(client, manager)
-    log(client, theirs, bilal["id"], company="Northwind", title="Engineer",
-        url="https://www.linkedin.com/jobs/view/3912000001")
+    rows = [["Acme", "Engineer", f"https://acme.example.com/careers/{300 + n}",
+             "Upwork", "bd@mbs.co", "2026-05-04", state]
+            for n, state in enumerate(("Skipped", "skip", "Pending",
+                                       "Not applied", "not yet", "To apply"))]
 
-    data = sheet([["Northwind", "Engineer",
-                   "https://www.linkedin.com/jobs/view/3912000001",
-                   "LinkedIn", "Bilal — Engineer", "Pending", ""]],
-                 headers=["Company name", "Job title", "Job link", "Job platform",
-                          "Found by", "Status", "Already applied"])
-    report = upload(client, mine, ayesha["id"], data)
+    report = upload(client, mine, ayesha["id"], sheet(
+        rows, headers=MBS_HEADERS + ["Status"]))
 
-    assert report["not_applied"] == 1
-    assert report["added"] == 0
-    assert client.get(f"/profiles/{ayesha['id']}/own", headers=mine).json() == []
+    assert report["added"] == 6
+    assert report["not_applied"] == 0
+    assert report["left_over"] == 0
+    assert len(client.get(f"/profiles/{ayesha['id']}/own", headers=mine).json()) == 6
 
 
 def test_a_status_describing_what_happened_after_applying_still_goes_in(client, manager):
@@ -318,21 +323,157 @@ def test_an_ambiguous_status_does_not_hold_a_line_back(client, manager):
     assert report["not_applied"] == 0
 
 
-def test_a_status_that_plainly_says_it_was_never_applied_for_holds_it_back(
-        client, manager):
+# --------------------------------------------------------------------------- #
+# A sheet lined up against the team's Google Sheet
+# --------------------------------------------------------------------------- #
+
+def google_row(n, applied_on="2026-07-14", **over):
+    row = {"Applied on": applied_on, "BD": "Ayesha", "Company name": f"Acme {n}",
+           "Job title": f"Engineer {n}",
+           "Job link": f"https://www.linkedin.com/jobs/view/39130000{n:02d}",
+           "Job platform": "LinkedIn", "Email": "bd@mbs.co",
+           "Own or others": "Own job", "Found by": "Ayesha",
+           "Filed at": "2026-07-14 10:30:00"}
+    row.update(over)
+    return [row[h] for h in GOOGLE_HEADERS]
+
+
+def test_a_sheet_in_the_google_sheets_columns_goes_in_whole(client, manager):
+    (mine, ayesha), (theirs, bilal) = workspace(client, manager)
+    data = sheet([google_row(n) for n in range(1, 6)], headers=GOOGLE_HEADERS)
+
+    report = upload(client, mine, ayesha["id"], data)
+
+    assert report["added"] == 5
+    assert report["undated"] == 0
+    own = client.get(f"/profiles/{ayesha['id']}/own", headers=mine).json()
+    assert {row["company"] for row in own} == {f"Acme {n}" for n in range(1, 6)}
+    assert all(row["applied_on"] == "2026-07-14" for row in own)
+    assert all(row["email"] == "bd@mbs.co" and row["platform"] == "LinkedIn"
+               for row in own)
+
+    # All jobs carries every line, standing as this profile's own application.
+    pool = client.get(f"/profiles/{ayesha['id']}/all", headers=mine).json()
+    assert sorted(row["standing"] for row in pool) == ["own"] * 5
+    pending = client.get(f"/profiles/{bilal['id']}/others", headers=theirs,
+                         params={"status": "pending"}).json()
+    assert len(pending) == 5
+
+
+def test_a_blank_applied_on_falls_back_to_filed_at(client, manager):
     (mine, ayesha), _ = workspace(client, manager)
-    rows = [["Acme", "Engineer", f"https://acme.example.com/careers/{300 + n}",
-             "Upwork", "bd@mbs.co", "2026-05-04", state]
-            for n, state in enumerate(("Skipped", "skip", "Pending",
-                                       "Not applied", "not yet", "To apply"))]
+    data = sheet([google_row(1, applied_on="", **{"Filed at": "2026-06-30 09:00:00"})],
+                 headers=GOOGLE_HEADERS)
 
-    report = upload(client, mine, ayesha["id"], sheet(
-        rows, headers=MBS_HEADERS + ["Status"]))
+    report = upload(client, mine, ayesha["id"], data)
 
-    assert report["not_applied"] == 6
-    assert report["added"] == 0
-    # And they are downloadable, so a BD who disagrees can fix and re-upload.
-    assert report["left_over"] == 6
+    assert report["undated"] == 0
+    own = client.get(f"/profiles/{ayesha['id']}/own", headers=mine).json()
+    assert own[0]["applied_on"] == "2026-06-30"
+
+
+def test_a_whole_downloaded_workbook_reads_only_this_profiles_tab(client, manager):
+    """The team's file has a tab per profile. Uploading all of it must not file
+    every colleague's work under this one."""
+    (mine, ayesha), _ = workspace(client, manager)
+    book = Workbook()
+    book.remove(book.active)
+    for name, first in ((ayesha["name"], 1), ("Bilal — Engineer", 20)):
+        page = book.create_sheet(name[:31])
+        page.append(GOOGLE_HEADERS)
+        for n in range(first, first + 3):
+            page.append(google_row(n))
+    stream = io.BytesIO()
+    book.save(stream)
+
+    report = upload(client, mine, ayesha["id"], stream.getvalue())
+
+    assert report["rows"] == 3
+    assert report["added"] == 3
+    assert report["sheets"] == ayesha["name"]
+
+
+def test_a_workbook_split_by_month_is_read_whole(client, manager):
+    (mine, ayesha), _ = workspace(client, manager)
+    book = Workbook()
+    book.remove(book.active)
+    for month, first in (("July", 1), ("August", 10)):
+        page = book.create_sheet(month)
+        page.append(GOOGLE_HEADERS)
+        for n in range(first, first + 2):
+            page.append(google_row(n))
+    stream = io.BytesIO()
+    book.save(stream)
+
+    assert upload(client, mine, ayesha["id"], stream.getvalue())["added"] == 4
+
+
+def test_a_month_first_file_is_read_month_first(client, manager):
+    """07/14/2026 can only be month-first, so 03/04/2026 in the same file is
+    the 4th of March, not the 3rd of April."""
+    (mine, ayesha), _ = workspace(client, manager)
+    data = sheet([google_row(1, applied_on="07/14/2026"),
+                  google_row(2, applied_on="03/04/2026")], headers=GOOGLE_HEADERS)
+    upload(client, mine, ayesha["id"], data)
+
+    days = {row["company"]: row["applied_on"] for row in
+            client.get(f"/profiles/{ayesha['id']}/own", headers=mine).json()}
+    assert days == {"Acme 1": "2026-07-14", "Acme 2": "2026-03-04"}
+
+
+def test_date_spellings_are_settled_to_one_day(client, manager):
+    (mine, ayesha), _ = workspace(client, manager)
+    spellings = ["14/07/2026", "14-Jul-2026", "Jul 14, 2026", "2026-07-14 18:05",
+                 "46217"]   # the last is 2026-07-14 as an Excel day count
+    data = sheet([google_row(n, applied_on=typed)
+                  for n, typed in enumerate(spellings, start=1)],
+                 headers=GOOGLE_HEADERS)
+    report = upload(client, mine, ayesha["id"], data)
+
+    assert report["undated"] == 0
+    own = client.get(f"/profiles/{ayesha['id']}/own", headers=mine).json()
+    assert {row["applied_on"] for row in own} == {"2026-07-14"}
+
+
+def test_an_unreadable_date_still_goes_in_and_is_reported(client, manager):
+    (mine, ayesha), _ = workspace(client, manager)
+    data = sheet([google_row(1, applied_on="sometime in July", **{"Filed at": ""})],
+                 headers=GOOGLE_HEADERS)
+
+    report = upload(client, mine, ayesha["id"], data)
+
+    assert report["added"] == 1
+    assert report["undated"] == 1
+
+    # Fixed and uploaded again: the line gets its day, and is not doubled.
+    fixed = sheet([google_row(1, applied_on="2026-07-02")], headers=GOOGLE_HEADERS)
+    again = upload(client, mine, ayesha["id"], fixed)
+    assert again["duplicate"] == 1
+    own = client.get(f"/profiles/{ayesha['id']}/own", headers=mine).json()
+    assert len(own) == 1
+    assert own[0]["applied_on"] == "2026-07-02"
+
+
+def test_an_imported_line_closes_off_a_job_this_profile_had_skipped(client, manager):
+    """The sheet says it was applied for. Leaving it on the Skipped list too
+    would count one job twice, in two contradictory places."""
+    (mine, ayesha), (theirs, bilal) = workspace(client, manager)
+    url = "https://www.linkedin.com/jobs/view/3913000001"
+    log(client, theirs, bilal["id"], company="Acme 1", title="Engineer 1", url=url)
+    handed = client.get(f"/profiles/{ayesha['id']}/others", headers=mine,
+                        params={"status": "pending"}).json()[0]
+    reply = client.post(f"/assignments/{handed['assignment_id']}", headers=mine,
+                         json={"status": "skipped", "reason": "not a fit"})
+    assert reply.status_code == 200, reply.text
+
+    report = upload(client, mine, ayesha["id"],
+                    sheet([google_row(1)], headers=GOOGLE_HEADERS))
+
+    assert report["known"] == 1
+    assert client.get(f"/profiles/{ayesha['id']}/others", headers=mine,
+                      params={"status": "skipped"}).json() == []
+    pool = client.get(f"/profiles/{ayesha['id']}/all", headers=mine).json()
+    assert pool[0]["standing"] == "own"
 
 
 # --------------------------------------------------------------------------- #
@@ -438,7 +579,8 @@ def test_the_template_carries_the_six_columns_the_grid_asks_for(client, manager)
     assert reply.status_code == 200
 
     book = load_workbook(io.BytesIO(reply.content))
-    assert [cell.value for cell in book["Jobs"][1]] == MBS_HEADERS
+    assert [cell.value for cell in book["Jobs"][1]] == GOOGLE_HEADERS[:1] + \
+        GOOGLE_HEADERS[2:7]
     assert book["Jobs"].max_row == 1          # headings, and nothing under them
     assert "How this is read" in book.sheetnames
 

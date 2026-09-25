@@ -398,8 +398,10 @@ def workspace_workbook(db: Session, board: dict, people: list[dict],
 # these headings imports with nothing to think about, which is the whole reason
 # the template exists — "the same attributes as the system" should be something
 # somebody can download rather than something they have to be told.
-TEMPLATE_COLUMNS = ["Company name", "Job title", "Job link", "Job platform",
-                    "Email", "Date"]
+# The Google Sheet mirror's order, so a BD lining an old sheet up against the
+# team's file and one filling in this template are doing the same thing.
+TEMPLATE_COLUMNS = ["Applied on", "Company name", "Job title", "Job link",
+                    "Job platform", "Email"]
 
 LEFTOVER_COLUMNS = ["Sheet", "Line", "Why it did not go in", "Company name",
                     "Job title", "Job link", "Job platform", "Email", "Date"]
@@ -424,15 +426,16 @@ def template_workbook(platforms: list[str]) -> tuple[bytes, str]:
     # back as a sheet of its own.
     notes = book.create_sheet("How this is read")
     for line in [
-        ("The six columns", "Company name · Job title · Job link "
-                            "· Job platform · Email · Date"),
-        ("A line looks like", "Northwind Labs · Senior RAG Engineer · "
+        ("The six columns", "Applied on · Company name · Job title "
+                            "· Job link · Job platform · Email"),
+        ("A line looks like", "2026-07-14 · Northwind Labs · Senior RAG Engineer · "
                               "https://www.linkedin.com/jobs/view/3912345678 "
-                              f"· {board} · you@yourdomain.com "
-                              "· 2026-07-14"),
+                              f"· {board} · you@yourdomain.com"),
         ("", ""),
-        ("Dates", "2026-07-14, 14/07/2026 and 14 Jul 2026 are all read. A real "
-                  "Excel date is read too."),
+        ("Dates", "2026-07-14, 14/07/2026, 07/14/2026 and 14 Jul 2026 are all "
+                  "read, and so is a real Excel date. 03/04/2026 is read the "
+                  "way the rest of the same file reads — if any line has a "
+                  "day over 12 first, the whole file is day-first."),
         ("", ""),
         ("What goes in", ""),
         ("", "Every line is a job this profile found and applied for. It is filed "
@@ -454,11 +457,16 @@ def template_workbook(platforms: list[str]) -> tuple[bytes, str]:
              "alone. If part of a large sheet did not go in, upload the same "
              "file again — only what is missing is added."),
         ("", ""),
-        ("A Status column, if you have one", ""),
-        ("", "Only a status that plainly says you never applied stops a line "
-             "being filed — skipped, skip, pending, not applied, not yet, "
-             "to apply. Rejected, No reply, No and Interview all describe what "
-             "happened after applying, so those lines go in."),
+        ("Everything is marked applied", ""),
+        ("", "Every line is filed as applied for, whatever any Status column "
+             "says. Only put in the sheet what this profile really applied for."),
+        ("", ""),
+        ("The Google Sheet's own columns", ""),
+        ("", "A tab from the team's Google Sheet uploads as it is: Applied on, "
+             "Company name, Job title, Job link, Job platform and Email are "
+             "read, and BD, Own or others, Found by and Filed at are ignored "
+             "(Filed at stands in for a blank Applied on). A whole downloaded "
+             "workbook reads only the tab named after this profile."),
     ]:
         notes.append(list(line))
     notes.column_dimensions["A"].width = 30

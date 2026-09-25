@@ -28,7 +28,7 @@ import csv
 import hashlib
 import io
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -71,29 +71,21 @@ ALIASES: dict[str, tuple[str, ...]] = {
               "from email", "account", "applied with", "bidder email"),
     "applied_on": ("date", "applied on", "applied date", "date applied",
                    "apply date", "application date", "applied at", "day"),
-    "status": ("status", "state", "stage", "outcome", "result", "response"),
+    # Only read when the applied-on cell is blank. It is the Google Sheet
+    # mirror's own last column, so a tab downloaded from there keeps its days
+    # even on a line whose "Applied on" somebody cleared.
+    "filed_at": ("filed at", "filed on", "logged at", "logged on",
+                 "created at", "timestamp"),
 }
 
 # A row needs one of these to be a posting at all. A line carrying only an
 # email and a date is a line somebody left behind, not a job.
 IDENTIFYING = ("company", "title", "url")
 
-# Read off a Status column, and read narrowly on purpose. A sheet whose status
-# column says "Rejected", "No reply" or "Interview" is describing what happened
-# *after* applying, and withholding those rows would be the very thing this
-# feature exists to prevent. Only a status that plainly says the BD never
-# applied stops a row — which is also what keeps a workbook exported from MBS
-# and uploaded straight back from inventing an application per pending row.
-#
-# Nothing ambiguous belongs here. "No", "None" and "N/A" were all considered
-# and left out: each is as likely to mean "no reply" as "not applied", and the
-# cost of reading one wrong is a row withheld, which is the one failure this
-# whole feature exists to prevent. A blank is not a statement either, and most
-# cells in a hand-kept status column are blank.
-NOT_APPLIED = frozenset({
-    "skipped", "skip", "pending", "not applied", "didnt apply", "did not apply",
-    "not yet", "to apply", "to be applied", "yet to apply", "will apply",
-})
+# There is deliberately no Status column. Everything in an uploaded sheet is a
+# job this profile applied for — that is what the upload means — so a status
+# cell is never a reason to hold a line back. A line withheld is the one
+# failure this feature exists to prevent.
 
 
 def _slug(value: object) -> str:
@@ -234,12 +226,28 @@ def _header(rows: list[list[str]]) -> tuple[int, dict[int, str]] | None:
     return best
 
 
-def read_rows(data: bytes, filename: str) -> tuple[list[dict], list[str]]:
+def _same_tab(title: str, wanted: str) -> bool:
+    """Whether a workbook tab is the one named after this profile.
+
+    Compared on the first 31 characters, because that is all an .xlsx allows
+    and a Google Sheet downloaded as one is cut down to it.
+    """
+    return _slug(title[:31]) == _slug(wanted[:31]) != ""
+
+
+def read_rows(data: bytes, filename: str,
+              tab: str = "") -> tuple[list[dict], list[str]]:
     """Every data row in the file, and the names of the sheets they came from.
 
     Each row is {sheet, line, company, title, url, platform, email,
-    applied_on, status}. `line` is the row number Excel shows, so a report
-    saying "line 812" can be found by scrolling to 812.
+    applied_on}. `line` is the row number Excel shows, so a report saying
+    "line 812" can be found by scrolling to 812.
+
+    `tab` is the profile's tab name. The team's Google Sheet has a tab per
+    profile, and a BD who downloads the whole file and uploads it must get
+    their own tab — not every colleague's work filed as theirs. So when one of
+    several readable tabs carries that name, it is the only one read. A
+    workbook without such a tab (July, August, September…) is read whole.
     """
     if not data:
         raise SheetError("That file is empty.")
@@ -258,36 +266,107 @@ def read_rows(data: bytes, filename: str) -> tuple[list[dict], list[str]]:
     else:
         raise SheetError("Upload an .xlsx or a .csv.")
 
-    out: list[dict] = []
-    read: list[str] = []
+    pages: list[tuple[str, list[dict]]] = []
     for name, rows in grids:
         found = _header(rows)
         if not found:
             continue  # a Summary sheet, a notes tab, a blank one
         start, mapping = found
-        before = len(out)
+        lines: list[dict] = []
         for line_no, row in enumerate(rows[start + 1:], start=start + 2):
             values = {key: (_text(row[column]) if column < len(row) else "")
                       for column, key in mapping.items()}
             if not any(values.values()):
                 continue  # a spacer row, or the blank tail of a used range
-            out.append({"sheet": name, "line": line_no,
-                        "company": values.get("company", ""),
-                        "title": values.get("title", ""),
-                        "url": values.get("url", ""),
-                        "platform": values.get("platform", ""),
-                        "email": values.get("email", ""),
-                        "applied_on": values.get("applied_on", ""),
-                        "status": values.get("status", "")})
-        if len(out) > before:
-            read.append(name)
+            lines.append({"sheet": name, "line": line_no,
+                          "company": values.get("company", ""),
+                          "title": values.get("title", ""),
+                          "url": values.get("url", ""),
+                          "platform": values.get("platform", ""),
+                          "email": values.get("email", ""),
+                          "applied_on": values.get("applied_on", "")
+                                        or values.get("filed_at", "")})
+        if lines:
+            pages.append((name, lines))
 
-    if not read:
+    if not pages:
         raise SheetError(
             "No column headings were recognised. The sheet needs a header row "
             "with at least a job link, or a company and a job title — "
             "download the template to see the six columns.")
-    return out, read
+
+    if len(pages) > 1 and tab:
+        own = [page for page in pages if _same_tab(page[0], tab)]
+        if own:
+            pages = own
+
+    _settle_dates([line for _, lines in pages for line in lines])
+    return ([line for _, lines in pages for line in lines],
+            [name for name, _ in pages])
+
+
+# --------------------------------------------------------------------------- #
+# Which day each line was applied on
+# --------------------------------------------------------------------------- #
+
+# 3/4/2026 is the 3rd of April to one BD and the 4th of March to the next, and
+# a sheet that is read the wrong way round files a quarter's work in the wrong
+# months. One sheet is kept by one person, so it is settled per file: any line
+# whose first number cannot be a month (14/07) makes the file day-first, any
+# whose second cannot (07/14) makes it month-first, and a file that says
+# neither is read day-first, the way the rest of MBS reads a typed date.
+_NUMERIC = re.compile(r"^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4}|\d{2})(?:[ T,].*)?$")
+_ISO = re.compile(r"^(\d{4})[/.\-](\d{1,2})[/.\-](\d{1,2})(?:[ T,].*)?$")
+
+# An Excel date that lost its formatting on the way to a CSV is a bare day
+# count. This range is 1954 to 2119, which no other number in a date column is.
+_SERIAL = re.compile(r"^(\d{5})(?:\.\d+)?$")
+
+
+def _day(text: str, month_first: bool) -> date | None:
+    text = text.strip()
+    if not text:
+        return None
+    try:
+        hit = _ISO.match(text)
+        if hit:
+            return date(int(hit[1]), int(hit[2]), int(hit[3]))
+        hit = _NUMERIC.match(text)
+        if hit:
+            first, second, year = int(hit[1]), int(hit[2]), int(hit[3])
+            year += 2000 if year < 100 else 0
+            month, day_ = (first, second) if month_first else (second, first)
+            return date(year, month, day_)
+        hit = _SERIAL.match(text)
+        if hit and 20000 <= int(hit[1]) <= 80000:
+            return date(1899, 12, 30) + timedelta(days=int(hit[1]))
+    except ValueError:
+        return None
+    return dispatch.as_date(text, None)
+
+
+def _settle_dates(lines: list[dict]) -> None:
+    """Rewrite every readable date as YYYY-MM-DD, in place.
+
+    Stored settled rather than as typed, so the date window, the manager's
+    counts and the Google Sheet all read the same day off it for ever after. A
+    date that cannot be read is left exactly as it was typed — the line still
+    goes in, it just counts against the day it was uploaded — and `dated` on
+    the line says which happened, so the report can say how many.
+    """
+    day_first = month_first = False
+    for line in lines:
+        hit = _NUMERIC.match(line["applied_on"].strip())
+        if hit:
+            day_first |= int(hit[1]) > 12
+            month_first |= int(hit[2]) > 12
+    order = month_first and not day_first
+
+    for line in lines:
+        settled = _day(line["applied_on"], order)
+        line["dated"] = settled is not None
+        if settled:
+            line["applied_on"] = settled.isoformat()
 
 
 # --------------------------------------------------------------------------- #
@@ -298,12 +377,14 @@ def read_rows(data: bytes, filename: str) -> tuple[list[dict], list[str]]:
 # duplicate + repeated + not_applied + unusable is the number of rows read.
 # That equality is the feature. A BD who is told 2,750 of 3,000 went in can
 # read the other 250 off the same report rather than wondering.
+#
+# `not_applied` is only ever non-zero on an upload made before a Status column
+# stopped holding lines back. It stays so those uploads still add up.
 COUNTS = ("added", "known", "duplicate", "repeated", "not_applied", "unusable")
 
 WHY = {
     "unusable": "Nothing in the row identified a posting — no link, "
                 "no company and no job title.",
-    "not_applied": "The sheet's status column says it was not applied for.",
 }
 
 
@@ -325,15 +406,18 @@ def earlier_upload(db: Session, profile_id: int, digest: str) -> Import | None:
 
 
 def run(db: Session, profile: Profile, user: User | None, filename: str,
-        data: bytes) -> Import:
+        data: bytes) -> tuple[Import, int]:
     """File a whole sheet against `profile`. Commits as it goes.
+
+    Returns the upload and how many of its filed lines had no readable date.
 
     Raises SheetError, before anything is written, if the file cannot be read
     at all. After that it does not raise: a row that cannot be filed is counted
     and kept, because thirty bad lines are not a reason to reject two thousand
     nine hundred and seventy good ones.
     """
-    rows, sheets = read_rows(data, filename)
+    from .sheets import tab_name
+    rows, sheets = read_rows(data, filename, tab_name(profile.name))
 
     batch = Import(profile_id=profile.id, user_id=user.id if user else None,
                    filename=filename[:255], digest=digest_of(data),
@@ -344,6 +428,9 @@ def run(db: Session, profile: Profile, user: User | None, filename: str,
     live = dispatch.live_profiles(db)
     seen: set[str] = set()
     tally = {key: 0 for key in COUNTS}
+    # Lines filed with no readable date. They are in, and applied, but they
+    # count against the day of the upload — worth saying, not worth refusing.
+    undated = 0
 
     def keep(row: dict, reason: str) -> None:
         db.add(ImportRow(import_id=batch.id, sheet=row["sheet"][:64],
@@ -353,24 +440,22 @@ def run(db: Session, profile: Profile, user: User | None, filename: str,
                          email=row["email"][:255], applied_on=row["applied_on"][:40]))
 
     for index, row in enumerate(rows, start=1):
-        if _slug(row["status"]) in NOT_APPLIED:
-            tally["not_applied"] += 1
-            keep(row, "not_applied")
+        mark, _tier = fingerprint(row["url"], row["title"], row["company"])
+        if not mark:
+            tally["unusable"] += 1
+            keep(row, "unusable")
+        elif mark in seen:
+            # The same posting twice in one sheet. Counted apart from
+            # `duplicate` because the two mean different things to whoever
+            # reads the report: one is their sheet repeating itself, the
+            # other is the system already holding the row.
+            tally["repeated"] += 1
         else:
-            mark, _tier = fingerprint(row["url"], row["title"], row["company"])
-            if not mark:
-                tally["unusable"] += 1
-                keep(row, "unusable")
-            elif mark in seen:
-                # The same posting twice in one sheet. Counted apart from
-                # `duplicate` because the two mean different things to whoever
-                # reads the report: one is their sheet repeating itself, the
-                # other is the system already holding the row.
-                tally["repeated"] += 1
-            else:
-                seen.add(mark)
-                tally[dispatch.log_find(
-                    db, profile, row, live, import_id=batch.id)["status"]] += 1
+            seen.add(mark)
+            filed = dispatch.log_find(db, profile, row, live, import_id=batch.id)
+            tally[filed["status"]] += 1
+            if not row["dated"]:
+                undated += 1
 
         if index % CHUNK == 0:
             for key in COUNTS:
@@ -381,7 +466,7 @@ def run(db: Session, profile: Profile, user: User | None, filename: str,
         setattr(batch, key, tally[key])
     batch.finished = True
     db.commit()
-    return batch
+    return batch, undated
 
 
 # --------------------------------------------------------------------------- #

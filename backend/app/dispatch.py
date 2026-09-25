@@ -31,7 +31,8 @@ from .models import Application, Assignment, Job, Profile, User, utcnow
 # one people really use; anything else falls through to the timestamp the row
 # was filed at, which is never wrong, only less precise than what was meant.
 _FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%Y/%m/%d",
-            "%d %b %Y", "%d %B %Y", "%b %d %Y", "%B %d %Y", "%d %b", "%d %B")
+            "%d %b %Y", "%d %B %Y", "%b %d %Y", "%B %d %Y", "%d-%b-%Y",
+            "%d-%B-%Y", "%d-%b-%y", "%d %b %y", "%d %b", "%d %B")
 
 
 def as_date(typed: object, fallback: datetime | None) -> date | None:
@@ -178,6 +179,16 @@ def log_find(db: Session, profile: Profile, row: dict,
     existing = db.scalar(select(Application).where(
         Application.job_id == job.id, Application.profile_id == profile.id))
     if existing and not reapply:
+        # Already on record, and left alone — except for what the record was
+        # missing. A sheet uploaded again after its date column was fixed is
+        # how an undated line gets its day, so a blank or unreadable date, or
+        # a blank email, is filled in. A good value is never overwritten.
+        typed_day = (row.get("applied_on") or "").strip()
+        if typed_day and as_date(existing.applied_on, None) is None \
+                and as_date(typed_day, None) is not None:
+            existing.applied_on = typed_day[:40]
+        if not existing.email and (row.get("email") or "").strip():
+            existing.email = row["email"].strip()[:255]
         return {"status": "duplicate", "job": job}
 
     # `import_id` marks where the line came from and nothing else. It is not a
@@ -188,12 +199,15 @@ def log_find(db: Session, profile: Profile, row: dict,
                        import_id=import_id))
     # A find that lands on a job already sitting on this profile's list means
     # the BD went and applied without touching the button. Close that row off
-    # rather than leaving it pending against an application that exists.
+    # rather than leaving it pending against an application that exists — or
+    # skipped, which is the same contradiction: an old sheet saying "applied"
+    # outranks a Skip pressed before the sheet was uploaded.
     standing = db.scalar(select(Assignment).where(
         Assignment.job_id == job.id, Assignment.profile_id == profile.id))
-    if standing and standing.status == "pending":
+    if standing and standing.status != "applied":
         standing.status = "applied"
         standing.status_changed_at = utcnow()
+        standing.skip_reason = ""
 
     fan_out(db, job, profile.id, live)
     return {"status": "added" if fresh else "reapplied" if existing else "known",

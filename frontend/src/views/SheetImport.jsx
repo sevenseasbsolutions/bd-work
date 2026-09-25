@@ -29,8 +29,10 @@ const BUCKETS = [
    "On record before the upload. Left exactly as they were."],
   ["repeated", "repeated within the sheet", "",
    "The same posting on more than one line of the file. Counted once."],
+  /* Only ever non-zero on an upload from before every line counted as
+     applied; hidden otherwise. */
   ["not_applied", "marked not applied for", "warn",
-   "The sheet's own status column says these were never applied for."],
+   "An older upload held these back on its Status column."],
   ["unusable", "could not be read", "warn",
    "No link, no company and no job title — nothing to identify a posting by."],
 ];
@@ -109,10 +111,14 @@ export default function SheetImport({ profile, onFiled }) {
       </div>
 
       <p className="muted small" style={{ marginTop: 0 }}>
-        Every line becomes a job <b>{profile.name}</b> found and applied for, and
-        lands on every other live profile&apos;s others&apos; jobs list — exactly as if
-        it had been typed into the grid below. The columns can be in any order
-        and the header row does not have to be the first row.
+        Every line becomes a job <b>{profile.name}</b> found and applied for —
+        it shows on Own jobs and on All jobs, and lands on every other live
+        profile&apos;s others&apos; jobs list, exactly as if it had been typed into
+        the grid below. Any Status column is ignored: every line is marked
+        applied. The columns can be in any order and the header row does not
+        have to be the first row. A tab from the team&apos;s Google Sheet uploads
+        as it is; a whole downloaded workbook reads only
+        the <b>{profile.name}</b> tab.
       </p>
 
       <label className={`drop ${over ? "over" : ""}`}
@@ -135,8 +141,9 @@ export default function SheetImport({ profile, onFiled }) {
 
       <div className="row" style={{ marginTop: "var(--s3)" }}>
         <span className="muted small">
-          Company name · Job title · Job link · Job platform · Email · Date.
-          Client, Role, Link, Portal and Applied on are understood too.
+          Applied on · Company name · Job title · Job link · Job platform · Email
+          — the Google Sheet&apos;s columns. Client, Role, Link, Portal and Date
+          are understood too.
         </span>
         <span className="spacer" />
         <button className="btn primary" disabled={!file || busy} onClick={send}>
@@ -190,7 +197,8 @@ function Report({ report }) {
       )}
 
       <div className="buckets">
-        {BUCKETS.map(([key, label, tone, why]) => (
+        {BUCKETS.filter(([key]) => key !== "not_applied" || report[key])
+          .map(([key, label, tone, why]) => (
           <div key={key} className={`bucket ${report[key] ? tone : "nil"}`} title={why}>
             <b>{report[key]}</b><span>{label}</span>
           </div>
@@ -200,10 +208,19 @@ function Report({ report }) {
       <p className="muted small" style={{ marginBottom: 0 }}>
         {/* The invariant, said out loud. It is the whole reason to trust the
             number above it. */}
-        Those six add up to the {report.rows} line{report.rows === 1 ? "" : "s"} read
+        Those add up to the {report.rows} line{report.rows === 1 ? "" : "s"} read
         out of the file — every one is accounted for.
         {left > 0 && " Fix the ones left over and upload that file; only what is missing is added."}
       </p>
+
+      {report.undated > 0 && (
+        <p className="muted small" style={{ marginBottom: 0 }}>
+          <b>{report.undated}</b> line{report.undated === 1 ? " was" : "s were"} filed
+          with no date that could be read, so {report.undated === 1 ? "it counts" : "they count"} against
+          today. Fix the date column and upload the same file again to put them on
+          the right day — nothing is doubled.
+        </p>
+      )}
     </div>
   );
 }

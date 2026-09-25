@@ -60,7 +60,7 @@ link hidden behind the word "Apply" is read off the hyperlink. **Download
 template** hands back an empty sheet with the right headings and a page
 explaining them.
 
-Afterwards, six numbers, and they add up to the number of lines read out of the
+Afterwards, five numbers, and they add up to the number of lines read out of the
 file — exactly:
 
 | | |
@@ -69,19 +69,29 @@ file — exactly:
 | **already in the pool** | a colleague had found it; this profile joins it |
 | **already on this profile** | on record before the upload, left alone |
 | **repeated within the sheet** | the same posting on two lines of one file |
-| **marked not applied for** | the sheet's status column plainly says so |
 | **could not be read** | no link, no company and no job title |
 
 That equality is the feature. "2,750 of my 3,000 went in" is followed by where
 the other 250 are, and the ones that did not go in download as a sheet — with
 the line number and the reason — to fix and send again.
 
-A Status column is read narrowly, and only ever to hold a line back: skipped,
-skip, pending, not applied, not yet, to apply. `Rejected`, `No reply` and
-`Interview` all describe what happened *after* applying, so those lines go in —
-and so does anything ambiguous, because the cost of reading one wrong is a row
-withheld. It is also what lets a workbook exported from MBS be uploaded
-straight back without inventing an application per pending row.
+Every line is marked applied. A Status column is ignored — Skipped, Pending,
+Not applied and all — because a line held back is data missed; put in the
+sheet only what the profile really applied for.
+
+A tab from the team's Google Sheet uploads as it is: Applied on, Company name,
+Job title, Job link, Job platform and Email are read; BD, Own or others and
+Found by are ignored, and Filed at stands in for a blank Applied on. Upload the
+whole downloaded workbook and only the tab named after the profile is read, so
+nobody files a colleague's work as their own. The template has the same six
+columns in the same order.
+
+Dates are settled to YYYY-MM-DD on the way in, so the date window, the counts
+and the Google Sheet all read the same day. `03/04/2026` is read the way the
+rest of the file reads: one line with a first number over 12 makes the file
+day-first, one with a second number over 12 makes it month-first. A line whose
+date cannot be read still goes in (counting against the upload day), the
+report says how many, and uploading the fixed file fills the date in.
 
 **Uploading twice is safe, and it is the answer to a sheet that half-arrived.**
 A posting is its fingerprint, so anything already on this profile's record is
