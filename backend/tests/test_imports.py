@@ -613,3 +613,50 @@ def test_the_template_fills_in_and_uploads(client, manager):
 
     assert upload(client, mine, ayesha["id"], stream.getvalue(),
                   "my jobs.xlsx")["added"] == 3
+
+
+# --------------------------------------------------------------------------- #
+# A sheet with the posting hidden behind the job title
+# --------------------------------------------------------------------------- #
+
+def test_links_hidden_behind_names_and_a_homepage_link_column(client, manager):
+    """The shape a real BD sheet arrived in: company and title cells linked to
+    LinkedIn, and the link column holding the company's website. Text stays
+    text, the title's link is the job link, and a homepage never fuses two
+    jobs at one company into one."""
+    (mine, ayesha), _ = workspace(client, manager)
+    book = Workbook()
+    page = book.active
+    page.append(MBS_HEADERS)
+    lines = [
+        ("Optum", "Medical Biller", "https://www.optum.com/en/", 4383411733),
+        ("Optum", "Claims Analyst", "https://www.optum.com/en/", 4383411999),
+        ("Jobgether", "AR Specialist", "https://www.jobgether.com", 4383338463),
+        ("Jobgether", "Billing Lead", "https://www.jobgether.com", 4383338999),
+        ("Xtensys", "Coordinator", "https://xtensys.com", 4387982127),
+        ("Allergy Partners", "Assistant", "https://allergy.com", 4387982127),
+        ("Acme", "x" * 900, "", None),
+    ]
+    for index, (company, title, site, job) in enumerate(lines, start=2):
+        page.append([company, title, site, "Linked in", "bd@mbs.co", None])
+        page.cell(row=index, column=1).hyperlink = \
+            f"https://www.linkedin.com/company/{company.lower()}/life/"
+        if job:
+            page.cell(row=index, column=2).hyperlink = \
+                f"https://www.linkedin.com/jobs/view/{job}/?trackingId=abc"
+    stream = io.BytesIO()
+    book.save(stream)
+
+    report = upload(client, mine, ayesha["id"], stream.getvalue())
+
+    assert report["added"] == 6
+    assert report["clashing"] == 1        # one link pasted onto two companies
+    assert report["repeated"] == 0
+    assert report["left_over"] == 1
+    own = client.get(f"/profiles/{ayesha['id']}/own", headers=mine).json()
+    optum = sorted(row["title"] for row in own if row["company"] == "Optum")
+    assert optum == ["Claims Analyst", "Medical Biller"]
+    assert all(not row["title"].startswith("http") for row in own)
+    by_title = {row["title"]: row["url"] for row in own}
+    assert by_title["Medical Biller"].startswith(
+        "https://www.linkedin.com/jobs/view/4383411733")
