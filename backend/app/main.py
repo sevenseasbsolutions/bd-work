@@ -194,7 +194,7 @@ class BulkIn(BaseModel):
     and a list that long wants to be a considered number rather than whatever
     the browser happened to send.
     """
-    ids: list[int] = Field(min_length=1, max_length=5000)
+    ids: list[int] = Field(min_length=1, max_length=10000)
     status: str
     applied_on: str = ""
     reason: str = Field("", max_length=300)
