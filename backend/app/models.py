@@ -224,6 +224,9 @@ class Import(Base):
     duplicate: Mapped[int] = mapped_column(Integer, default=0)
     repeated: Mapped[int] = mapped_column(Integer, default=0)
     not_applied: Mapped[int] = mapped_column(Integer, default=0)
+    # The same job link as an earlier line, under a different company: a
+    # link pasted onto the wrong row. Held back to be checked, not guessed at.
+    clashing: Mapped[int] = mapped_column(Integer, default=0)
     unusable: Mapped[int] = mapped_column(Integer, default=0)
     # False while rows are still going in, and left False if the run died
     # halfway. A half-finished import is not a failure — the lines that landed

@@ -27,6 +27,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import logging
 import re
 from datetime import date, datetime, timedelta
 
@@ -34,8 +35,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import dispatch
-from .matching import fingerprint
+from .matching import fingerprint, is_posting, normalize_text
 from .models import Import, ImportRow, Profile, User
+
+log = logging.getLogger("mbs.imports")
 
 # Anything bigger than this is not a BD's job sheet, and reading it would be a
 # way to take the server's memory out from the other side of a login form.
@@ -139,7 +142,11 @@ def _decode(data: bytes) -> str:
     return data.decode("cp1252", "replace")
 
 
-def _csv_grid(data: bytes) -> list[tuple[str, list[list[str]]]]:
+# A sheet as text: (tab name, rows of cells, {(row, column): hidden link}).
+Grid = tuple[str, list[list[str]], dict[tuple[int, int], str]]
+
+
+def _csv_grid(data: bytes) -> list[Grid]:
     text = _decode(data)
     try:
         dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
@@ -147,17 +154,22 @@ def _csv_grid(data: bytes) -> list[tuple[str, list[list[str]]]]:
         dialect = csv.excel
     rows = [[_text(cell) for cell in row]
             for row in csv.reader(io.StringIO(text), dialect)]
-    return [("Sheet", rows)]
+    return [("Sheet", rows, {})]
 
 
-def _xlsx_grid(data: bytes) -> list[tuple[str, list[list[str]]]]:
-    """Every sheet in the workbook, as text.
+def _xlsx_grid(data: bytes) -> list[Grid]:
+    """Every sheet in the workbook, as text, with the links hidden in cells.
 
     Read in full rather than in openpyxl's read-only mode, because a read-only
     cell carries no hyperlink. Plenty of old sheets have the word "Apply" in
-    the link column with the address hidden behind it, and the address is the
-    only part of that row worth having. MAX_BYTES is what keeps holding a whole
-    workbook in memory a reasonable thing to do.
+    the link column with the address hidden behind it, or the job title itself
+    linked to the posting — and the address is the only part of that row worth
+    having. MAX_BYTES is what keeps holding a whole workbook in memory a
+    reasonable thing to do.
+
+    The links are kept apart from the text rather than swapped in for it. A
+    company name linked to the company's LinkedIn page is still a company
+    name; which hidden link, if any, is the job link is `read_rows`' call.
     """
     from openpyxl import load_workbook
     from openpyxl.utils.exceptions import InvalidFileException
@@ -171,23 +183,47 @@ def _xlsx_grid(data: bytes) -> list[tuple[str, list[list[str]]]]:
     except Exception:
         raise SheetError("That file could not be opened as a spreadsheet.")
 
-    grids: list[tuple[str, list[list[str]]]] = []
+    grids: list[Grid] = []
     for page in book.worksheets:
         rows: list[list[str]] = []
-        for line in page.iter_rows():
-            cells = []
-            for cell in line:
-                shown = _text(cell.value)
-                target = getattr(cell.hyperlink, "target", None)
-                # The visible text wins unless it is not a link and the cell is
-                # hiding one — "Apply" over https://… is the case this is for.
-                if target and not re.match(r"^\s*https?://", shown, re.I):
-                    shown = str(target).strip()
-                cells.append(shown)
-            rows.append(cells)
-        grids.append((page.title, rows))
+        links: dict[tuple[int, int], str] = {}
+        for index, line in enumerate(page.iter_rows()):
+            rows.append([_text(cell.value) for cell in line])
+            for column, cell in enumerate(line):
+                target = str(getattr(cell.hyperlink, "target", None) or "").strip()
+                if _is_link(target):
+                    links[(index, column)] = target
+        grids.append((page.title, rows, links))
     book.close()
     return grids
+
+
+def _is_link(text: str) -> bool:
+    return bool(re.match(r"^\s*https?://", text or "", re.I))
+
+
+def _job_link(typed: str, hidden: dict[str, str]) -> str:
+    """The posting's address, from wherever the sheet keeps it.
+
+    Old sheets keep it in three places: typed into the link column, hidden
+    behind the link column ("Apply" over https://…), or hidden behind the job
+    title — with the link column holding the company's website instead. The
+    first of these that names a posting wins. A company homepage is kept only
+    when nothing better exists, and it never identifies a job on its own
+    (see `matching.is_posting`).
+    """
+    shown = typed if _is_link(typed) else ""
+    candidates = [shown, hidden.get("url", ""), hidden.get("title", "")]
+    # A platform's own job id beats any other address: a Glassdoor company
+    # page in the link column is a long path too, but only the LinkedIn link
+    # behind the title names one opening.
+    for link in candidates:
+        if link and fingerprint(link, "", "")[1] == "L1":
+            return link
+    for link in candidates:
+        if link and is_posting(link):
+            return link
+    return next((link for link in candidates if link), typed)
 
 
 def _header(rows: list[list[str]]) -> tuple[int, dict[int, str]] | None:
@@ -267,21 +303,25 @@ def read_rows(data: bytes, filename: str,
         raise SheetError("Upload an .xlsx or a .csv.")
 
     pages: list[tuple[str, list[dict]]] = []
-    for name, rows in grids:
+    for name, rows, links in grids:
         found = _header(rows)
         if not found:
             continue  # a Summary sheet, a notes tab, a blank one
         start, mapping = found
+        column_of = {key: column for column, key in mapping.items()}
         lines: list[dict] = []
-        for line_no, row in enumerate(rows[start + 1:], start=start + 2):
+        for index in range(start + 1, len(rows)):
+            row = rows[index]
             values = {key: (_text(row[column]) if column < len(row) else "")
                       for column, key in mapping.items()}
             if not any(values.values()):
                 continue  # a spacer row, or the blank tail of a used range
-            lines.append({"sheet": name, "line": line_no,
+            hidden = {key: links.get((index, column_of[key]), "")
+                      for key in ("url", "title") if key in column_of}
+            lines.append({"sheet": name, "line": index + 1,
                           "company": values.get("company", ""),
                           "title": values.get("title", ""),
-                          "url": values.get("url", ""),
+                          "url": _job_link(values.get("url", ""), hidden),
                           "platform": values.get("platform", ""),
                           "email": values.get("email", ""),
                           "applied_on": values.get("applied_on", "")
@@ -380,12 +420,28 @@ def _settle_dates(lines: list[dict]) -> None:
 #
 # `not_applied` is only ever non-zero on an upload made before a Status column
 # stopped holding lines back. It stays so those uploads still add up.
-COUNTS = ("added", "known", "duplicate", "repeated", "not_applied", "unusable")
+COUNTS = ("added", "known", "duplicate", "repeated", "clashing",
+          "not_applied", "unusable")
 
 WHY = {
     "unusable": "Nothing in the row identified a posting — no link, "
                 "no company and no job title.",
+    "clashing": "Same job link as an earlier line, but a different company "
+                "— one of the two links is probably on the wrong line.",
+    "refused": "The database would not take this line — check it for a "
+               "pasted-in page of text.",
 }
+
+
+def _clash(first: str, then: str) -> bool:
+    """Whether two company names on one link are plainly two companies.
+
+    Loose on purpose: "Kettering Health" and "Kettering Health Network", or
+    "Tennova Healthcare- North Knox" and "Tennova Healthcare", are one company
+    typed twice. Only names sharing no word at all count as a clash.
+    """
+    a, b = set(normalize_text(first).split()), set(normalize_text(then).split())
+    return bool(a and b and not a & b)
 
 
 def digest_of(data: bytes) -> str:
@@ -426,7 +482,8 @@ def run(db: Session, profile: Profile, user: User | None, filename: str,
     db.commit()
 
     live = dispatch.live_profiles(db)
-    seen: set[str] = set()
+    # fingerprint -> the company on the first line that had it
+    seen: dict[str, str] = {}
     tally = {key: 0 for key in COUNTS}
     # Lines filed with no readable date. They are in, and applied, but they
     # count against the day of the upload — worth saying, not worth refusing.
@@ -444,6 +501,12 @@ def run(db: Session, profile: Profile, user: User | None, filename: str,
         if not mark:
             tally["unusable"] += 1
             keep(row, "unusable")
+        elif mark in seen and _clash(seen[mark], row["company"]):
+            # One link, two companies. Filing it as a repeat would lose one
+            # job without a word; filing it as its own job under somebody
+            # else's link would be worse. It goes back to be looked at.
+            tally["clashing"] += 1
+            keep(row, "clashing")
         elif mark in seen:
             # The same posting twice in one sheet. Counted apart from
             # `duplicate` because the two mean different things to whoever
@@ -451,8 +514,19 @@ def run(db: Session, profile: Profile, user: User | None, filename: str,
             # other is the system already holding the row.
             tally["repeated"] += 1
         else:
-            seen.add(mark)
-            filed = dispatch.log_find(db, profile, row, live, import_id=batch.id)
+            seen[mark] = row["company"]
+            # One line the database refuses must not take the rest of the
+            # file down with it. It is rolled back on its own, counted, and
+            # handed back in the leftovers file like any other.
+            try:
+                with db.begin_nested():
+                    filed = dispatch.log_find(db, profile, row, live,
+                                              import_id=batch.id)
+            except Exception:
+                log.exception("import %s: line %s refused", batch.id, row["line"])
+                tally["unusable"] += 1
+                keep(row, "refused")
+                continue
             tally[filed["status"]] += 1
             if not row["dated"]:
                 undated += 1
@@ -480,7 +554,7 @@ def batch_out(batch: Import, holder: str = "") -> dict:
         "at": batch.created_at.isoformat() if batch.created_at else None,
         "rows": batch.rows,
         # What is downloadable from this upload: the lines it could not file.
-        "left_over": batch.not_applied + batch.unusable,
+        "left_over": batch.not_applied + batch.unusable + batch.clashing,
         **{key: getattr(batch, key) for key in COUNTS},
     }
 

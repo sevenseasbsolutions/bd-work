@@ -7,6 +7,7 @@ applied for this" never fires when it should.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import unicodedata
 import urllib.parse
@@ -146,10 +147,51 @@ def fingerprint(url: object, title: object, company: object) -> tuple[str, str]:
                 return (f"id:{tag}:{site}:{value}" if site_scoped
                         else f"id:{tag}:{value}"), "L1"
         stem = posting_stem(raw_url) or canonical_url(raw_url)
-        if len(stem) > 8:
-            return f"url:{stem}", "L2"
+        if len(stem) > 8 and is_posting(raw_url):
+            return _capped(f"url:{stem}"), "L2"
 
     client, role = normalize_text(company), normalize_text(title)
     if not client and not role:
         return "", "-"
-    return f"ct:{client}|{role}", "L3"
+    return _capped(f"ct:{client}|{role}"), "L3"
+
+
+# Paths that name a site rather than an opening. A sheet whose link column
+# holds the company's website — optum.com/en/, acme.com/careers — would
+# otherwise fuse every job at that company into one row, and the rest would
+# vanish as repeats. Such a link falls through to company and title instead.
+_SITE_PATHS = frozenset({
+    "en", "en-us", "en-gb", "us", "home", "index", "about", "about-us",
+    "careers", "career", "jobs", "job", "join-us", "joinus", "work-with-us",
+    "opportunities", "company", "life", "overview",
+})
+
+
+# Hosts whose every page is one screen of an apply flow, whichever job it is
+# for. Indeed's apply form carries no job id in its address, so two different
+# jobs applied for through it share a link.
+_FLOW_HOSTS = frozenset({"smartapply.indeed.com"})
+
+
+def is_posting(url: object) -> bool:
+    """Whether a link can point at one opening, rather than at a whole site."""
+    site, path = split_url(url)
+    if not site or site in _FLOW_HOSTS:
+        return False
+    parts = [part for part in path.split("/") if part]
+    if not parts:
+        return "?" in canonical_url(url)
+    return not (len(parts) == 1 and (len(parts[0]) < 4 or parts[0] in _SITE_PATHS))
+
+
+# jobs.fingerprint is 400 characters. A title somebody pasted a whole tracking
+# URL into is longer than that, and a key that does not fit is an import that
+# stops dead. The tail is hashed rather than cut, so two long keys that share
+# a beginning stay two keys.
+_MAX = 400
+
+
+def _capped(key: str) -> str:
+    if len(key) <= _MAX:
+        return key
+    return key[:_MAX - 41] + "#" + hashlib.sha1(key.encode()).hexdigest()

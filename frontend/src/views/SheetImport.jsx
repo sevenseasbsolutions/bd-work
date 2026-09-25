@@ -29,6 +29,8 @@ const BUCKETS = [
    "On record before the upload. Left exactly as they were."],
   ["repeated", "repeated within the sheet", "",
    "The same posting on more than one line of the file. Counted once."],
+  ["clashing", "one link, two companies", "warn",
+   "The same job link as an earlier line, under a different company. One of the two links is probably on the wrong line — download them, fix the link, upload again."],
   /* Only ever non-zero on an upload from before every line counted as
      applied; hidden otherwise. */
   ["not_applied", "marked not applied for", "warn",
