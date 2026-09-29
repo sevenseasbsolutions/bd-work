@@ -5,7 +5,7 @@
  */
 import React, { useMemo, useState } from "react";
 import { api } from "../api.js";
-import { ALL_TIME, asRow, CopyButton, DateRange, Empty, ExportButton, jobMatches,
+import { TODAY, asRow, CopyButton, DateRange, Empty, ExportButton, jobMatches,
          State, Tile, UrlCell, useLoad } from "./ui.jsx";
 
 /* A copied row starts with the entry grid's own columns, so a manager pulling
@@ -22,7 +22,7 @@ const copyRow = (job) => asRow([
 ]);
 
 export default function Pool() {
-  const [range, setRange] = useState(ALL_TIME);
+  const [range, setRange] = useState(TODAY);
   const rows = useLoad(() => api.pool(range), [range.since, range.until]);
   const [query, setQuery] = useState("");
 

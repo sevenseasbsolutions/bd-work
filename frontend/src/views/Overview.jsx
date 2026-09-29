@@ -4,13 +4,20 @@
  * use. A manager and a BD disagreeing about what "applied" means is the
  * failure this screen is shaped to avoid.
  */
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { api } from "../api.js";
-import { ALL_TIME, DateRange, Empty, ExportButton, State, Tile, useLoad } from "./ui.jsx";
+import SkipReport from "./SkipReport.jsx";
+import { TODAY, today, DateRange, Empty, ExportButton, State, Tile, useLoad } from "./ui.jsx";
 
 export default function Overview({ onOpenPeople }) {
-  const [range, setRange] = useState(ALL_TIME);
+  const [range, setRange] = useState(TODAY);
   const board = useLoad(() => api.overview(range), [range.since, range.until]);
+  // The skipped report, opened from the Skipped tile or any Skipped number.
+  const [skips, setSkips] = useState(false);
+  useEffect(() => {
+    if (skips) document.getElementById("skip-report")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [skips]);
+  const openSkips = () => setSkips(true);
 
   if (board.error && !board.data) return <Empty>{board.error}</Empty>;
   if (board.first) return <Empty>Loading…</Empty>;
@@ -31,7 +38,9 @@ export default function Overview({ onOpenPeople }) {
           <h1>Where the work is</h1>
           <span className="muted small">
             {range.since || range.until
-              ? "Every number below is read through the range above."
+              ? (range.since === range.until
+                ? `Every number below is ${range.since === today() ? "today's" : `for ${range.since}`}.`
+                : "Every number below is read through the range above.")
               : "Everything, all the time — there is no cycle to open."}
           </span>
         </header>
@@ -39,7 +48,10 @@ export default function Overview({ onOpenPeople }) {
           <Tile value={totals.applied} label="applied in all" accent />
           <Tile value={totals.own} label="own jobs found" />
           <Tile value={totals.from_others} label="others' jobs applied for" />
-          <Tile value={totals.skipped} label="skipped" />
+          <button type="button" className="tile" aria-pressed={skips}
+                  title="Who skipped, and why" onClick={() => setSkips(!skips)}>
+            <b>{totals.skipped}</b><span>skipped · <em>{skips ? "hide report" : "see why"}</em></span>
+          </button>
           <Tile value={totals.pending} label="still pending" />
           <Tile value={totals.jobs} label="jobs in the pool" />
         </div>
@@ -52,6 +64,8 @@ export default function Overview({ onOpenPeople }) {
           </p>
         )}
       </div>
+
+      {skips && <SkipReport range={range} onClose={() => setSkips(false)} />}
 
       <div className="card">
         <header>
@@ -80,7 +94,11 @@ export default function Overview({ onOpenPeople }) {
                     <td className="num">{seat.own}</td>
                     <td className="num">{seat.given}</td>
                     <td className="num">{seat.from_others}</td>
-                    <td className="num">{seat.skipped}</td>
+                    <td className="num">
+                      {seat.skipped
+                        ? <button className="link" onClick={openSkips}>{seat.skipped}</button>
+                        : 0}
+                    </td>
                     <td className="num">{seat.pending}</td>
                     <td className="num strong">{seat.applied}</td>
                   </tr>

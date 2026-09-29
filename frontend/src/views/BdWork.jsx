@@ -16,7 +16,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import EntryGrid from "./EntryGrid.jsx";
 import SheetImport from "./SheetImport.jsx";
-import { ALL_TIME, asRow, Chip, CopyButton, Danger, DateRange, Empty, ExportButton,
+import { TODAY, asRow, Chip, CopyButton, Danger, DateRange, Empty, ExportButton,
          jobMatches, State, Tile, UrlCell, useLoad, useToast } from "./ui.jsx";
 
 const STANDING = {
@@ -33,7 +33,7 @@ const emptyBecause = (range, inRange, always) =>
   (range.since || range.until) ? inRange : always;
 
 export default function BdWork({ readOnly = false }) {
-  const [range, setRange] = useState(ALL_TIME);
+  const [range, setRange] = useState(TODAY);
   const profiles = useLoad(() => api.profiles(range), [range.since, range.until]);
   // The manager's switches. Read once for the screen rather than per tab, and
   // read at all because a BD screen has to know what it is allowed to draw.

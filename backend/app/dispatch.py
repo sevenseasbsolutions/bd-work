@@ -464,3 +464,74 @@ def profile_counts(db: Session, since: date | None = None,
             "applied": o + f,
         }
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Why things were skipped
+# --------------------------------------------------------------------------- #
+
+# The reasons the Skip box offers (BdWork.jsx keeps the same list for its
+# suggestions). Anything typed that is not one of these is filed under Other
+# and listed as typed, so a new habit shows up before it becomes a category.
+SKIP_REASONS = ("Not a skill match", "Budget too low", "Location / time zone",
+                "Client looks unreliable", "Posting is closed", "Too many applicants")
+OTHER = "Other"
+_KNOWN = {r.casefold(): r for r in SKIP_REASONS}
+
+
+def reason_category(text: str) -> str:
+    """The category a skip reason is counted under."""
+    return _KNOWN.get(re.sub(r"\s+", " ", text or "").strip().casefold(), OTHER)
+
+
+def skip_report(db: Session, since: date | None = None,
+                until: date | None = None) -> dict:
+    """Skipped others' jobs, per BD and per reason, through the window.
+
+    The same rows and the same day as `profile_counts`, so a BD's skipped here
+    is the skipped beside their name on the overview. `given` rides along
+    because ten skips out of twelve and ten out of four hundred are different
+    conversations to have with somebody.
+    """
+    reasons = [*SKIP_REASONS, OTHER]
+    seats: dict[int | None, dict] = {}
+    by_reason = {r: 0 for r in reasons}
+    typed: dict[str, int] = {}
+
+    rows = db.execute(
+        select(Assignment.status, Assignment.skip_reason, Assignment.created_at,
+               Assignment.status_changed_at, Profile.user_id, User.name)
+        .join(Profile, Profile.id == Assignment.profile_id)
+        .outerjoin(User, User.id == Profile.user_id)
+    ).all()
+    for status, reason, created_at, changed, user_id, name in rows:
+        if not within(as_date("", changed or created_at), since, until):
+            continue
+        seat = seats.setdefault(user_id, {
+            "user_id": user_id, "name": name or "Nobody holds it",
+            "given": 0, "skipped": 0, "by_reason": {r: 0 for r in reasons}})
+        seat["given"] += 1
+        if status != "skipped":
+            continue
+        category = reason_category(reason)
+        seat["skipped"] += 1
+        seat["by_reason"][category] += 1
+        by_reason[category] += 1
+        if category == OTHER:
+            said = re.sub(r"\s+", " ", reason or "").strip() or "(no reason given)"
+            typed[said] = typed.get(said, 0) + 1
+
+    people = sorted(seats.values(), key=lambda s: (-s["skipped"], s["name"]))
+    for seat in people:
+        seat["rate"] = round(seat["skipped"] / seat["given"], 4) if seat["given"] else 0
+    skipped = sum(by_reason.values())
+    given = sum(s["given"] for s in people)
+    return {
+        "reasons": reasons,
+        "totals": {"skipped": skipped, "given": given,
+                   "rate": round(skipped / given, 4) if given else 0,
+                   "by_reason": by_reason},
+        "people": people,
+        "other_reasons": [{"reason": r, "count": n} for r, n in
+                          sorted(typed.items(), key=lambda kv: (-kv[1], kv[0]))],
+    }

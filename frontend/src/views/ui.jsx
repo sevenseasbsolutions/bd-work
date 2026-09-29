@@ -153,9 +153,14 @@ const daysAgo = (n) => {
 
 export const ALL_TIME = { since: "", until: "" };
 
-// The four answers to "from when?" that people actually want, plus the two
+/** Today and nothing else — where every screen opens. A fresh object each
+ *  call, so a screen left open past midnight picks up the new day on reload. */
+export const TODAY = () => ({ since: today(), until: today() });
+
+// The five answers to "from when?" that people actually want, plus the two
 // boxes for the fifth. `since: 6` days back is seven days counting today.
 const PRESETS = [
+  ["Today", TODAY],
   ["All time", () => ALL_TIME],
   ["Last 7 days", () => ({ since: daysAgo(6), until: today() })],
   ["Last 30 days", () => ({ since: daysAgo(29), until: today() })],
@@ -182,14 +187,20 @@ export function DateRange({ value, onChange, children }) {
                   onClick={() => onChange(target)}>{label}</button>
         );
       })}
-      <span className="muted small">From</span>
+      <span className="muted small">Day</span>
+      {/* One day, the one most people want when they reach for a date: sets
+          both ends at once rather than making them type it twice. */}
+      <input type="date" className="day" aria-label="One day"
+             value={value.since && value.since === value.until ? value.since : ""}
+             onChange={(e) => onChange({ since: e.target.value, until: e.target.value })} />
+      <span className="muted small">or from</span>
       <input type="date" className="day" value={value.since} max={value.until || undefined}
              onChange={set("since")} aria-label="From date" />
       <span className="muted small">to</span>
       <input type="date" className="day" value={value.until} min={value.since || undefined}
              onChange={set("until")} aria-label="To date" />
-      {!same(value, ALL_TIME) && (
-        <button className="link" onClick={() => onChange(ALL_TIME)}>Clear</button>
+      {!same(value, TODAY()) && (
+        <button className="link" onClick={() => onChange(TODAY())}>Back to today</button>
       )}
       {children && (
         <span className="row" style={{ gap: "var(--s2)", marginLeft: "auto" }}>

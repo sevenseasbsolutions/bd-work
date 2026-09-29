@@ -398,3 +398,65 @@ td.tick { vertical-align: middle; }
 .tick input[type="checkbox"] { width: 15px; height: 15px; margin: 0; accent-color: var(--a); cursor: pointer; }
 tbody tr.picked { background: var(--a-soft); }
 tbody tr.picked:hover { background: var(--a-soft); }
+
+/* ── Charts ────────────────────────────────────────────────────────────── */
+/* Seven categorical slots, validated as an adjacent set in both modes. Fixed
+   order: a reason takes the slot of its place in the list, never its rank. */
+:root {
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+  --series-4: #eda100; --series-5: #e87ba4; --series-6: #008300;
+  --series-7: #4a3aa7;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+    --series-4: #c98500; --series-5: #d55181; --series-6: #008300;
+    --series-7: #9085e9;
+  }
+}
+:root[data-theme="dark"] {
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+  --series-4: #c98500; --series-5: #d55181; --series-6: #008300;
+  --series-7: #9085e9;
+}
+
+/* A tile that opens something is a button in a tile's clothes. */
+button.tile { font: inherit; color: inherit; text-align: left; cursor: pointer;
+  transition: border-color .15s var(--out), transform .15s var(--out); }
+button.tile:hover { border-color: var(--a-line); }
+button.tile:focus-visible { outline: none; box-shadow: var(--ring); }
+button.tile[aria-pressed="true"] { border-color: var(--a); }
+button.tile em { font-style: normal; color: var(--a-text); }
+
+.legend { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4); margin: var(--s2) 0 var(--s4);
+  font-size: 12px; color: var(--n8); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+.bars { display: grid; gap: var(--s2); }
+.bar-row { display: grid; grid-template-columns: minmax(80px, 160px) 1fr auto;
+  align-items: center; gap: var(--s3); font-size: 13px; }
+.bar-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.bar-track { position: relative; height: 18px; }
+.bar-fill { display: flex; gap: 2px; height: 100%; min-width: 4px; }
+.bar-fill .seg { flex-basis: 0; min-width: 3px; height: 100%; }
+.bar-fill .seg:first-child { border-radius: 4px 0 0 4px; }
+.bar-fill .seg:last-child { border-radius: 0 4px 4px 0; }
+.bar-fill .seg:only-child { border-radius: 4px; }
+.bar-fill .seg:hover { opacity: .8; }
+.bar-value { font: 600 12px/1 var(--mono); white-space: nowrap; }
+.bar-tip { position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 5;
+  background: var(--n9); color: var(--n0); font-size: 12px; padding: 5px 8px;
+  border-radius: var(--r1); white-space: nowrap; pointer-events: none; box-shadow: var(--sh2); }
+
+tfoot td { border-top: 2px solid var(--n4); }
+
+.typed { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-width: 520px; }
+.typed li { display: flex; justify-content: space-between; gap: var(--s4); font-size: 13px;
+  padding: 4px 0; border-bottom: 1px solid var(--n3); }
+.typed b { font-family: var(--mono); }
+
+@media (max-width: 560px) {
+  .bar-row { grid-template-columns: 1fr auto; }
+  .bar-track { grid-column: 1 / -1; grid-row: 2; }
+}

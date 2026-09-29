@@ -684,6 +684,13 @@ def overview(db: Session = Depends(get_db), _: User = Depends(manager_only),
             "people": sorted(people.values(), key=lambda s: s["name"])}
 
 
+@app.get("/reports/skipped")
+def skipped_report(db: Session = Depends(get_db), _: User = Depends(manager_only),
+                   span: Window = Depends(window)) -> dict:
+    """Who skipped how much, and why — what the Skipped tile opens onto."""
+    return dispatch.skip_report(db, *span)
+
+
 # --------------------------------------------------------------------------- #
 # Sheet import — three months of somebody's spreadsheet, into the pool
 # --------------------------------------------------------------------------- #

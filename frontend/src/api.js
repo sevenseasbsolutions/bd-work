@@ -246,6 +246,7 @@ export const api = {
   allJobs: (id, range) => call(`/profiles/${id}/all${span(range)}`),
   pool: (range) => call(`/jobs${span(range)}`),
   overview: (range) => call(`/overview${span(range)}`),
+  skipReport: (range) => call(`/reports/skipped${span(range)}`),
 
   // Both read through the same date range as the screen they are started from.
   exportProfile: (id, range) =>
