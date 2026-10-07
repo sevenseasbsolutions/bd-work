@@ -1,5 +1,5 @@
 # MBS
-
+read this and you have idea what we've built
 A job-dispatch board, cut down to the part that matters.
 
 A BD finds a job and applies for it under one of their profiles. The same
